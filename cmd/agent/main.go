@@ -12,11 +12,7 @@ import (
 	"github.com/austinkregel/compute-agent/internal/app"
 	"github.com/austinkregel/compute-agent/pkg/config"
 	"github.com/austinkregel/compute-agent/pkg/logging"
-)
-
-var (
-	version = "0.1.0-dev"
-	commit  = "unknown"
+	"github.com/austinkregel/compute-agent/pkg/version"
 )
 
 func main() {
@@ -27,7 +23,7 @@ func main() {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("backup-agent %s (%s)\n", version, commit)
+		fmt.Printf("backup-agent %s (%s) built=%s\n", version.Version, version.Commit, version.BuildDate)
 		return
 	}
 
@@ -61,3 +57,4 @@ func main() {
 		os.Exit(1)
 	}
 }
+

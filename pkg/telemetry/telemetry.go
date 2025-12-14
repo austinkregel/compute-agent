@@ -15,6 +15,7 @@ import (
 	"github.com/austinkregel/compute-agent/pkg/config"
 	"github.com/austinkregel/compute-agent/pkg/logging"
 	"github.com/austinkregel/compute-agent/pkg/transport"
+	"github.com/austinkregel/compute-agent/pkg/version"
 )
 
 // Publisher periodically gathers system metrics and ships them over the transport.
@@ -53,7 +54,8 @@ func (p *Publisher) Run(ctx context.Context) error {
 
 func (p *Publisher) emitSample() {
 	sample := StatsSample{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		AgentVersion: version.Version,
 	}
 
 	// CPU percentage
@@ -167,6 +169,7 @@ func (p *Publisher) emitSample() {
 
 // StatsSample defines the schema sent to the control plane.
 type StatsSample struct {
+	AgentVersion string         `json:"agentVersion,omitempty"`
 	CPUPercent float64        `json:"cpu"`
 	Mem        *MemInfo       `json:"mem,omitempty"` // UI expects mem object, not memPercent
 	Load       LoadAvg        `json:"load"`

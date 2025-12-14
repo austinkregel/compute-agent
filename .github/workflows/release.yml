@@ -19,6 +19,11 @@ on:
           - 'true'
           - 'false'
 
+env:
+  # Optional: notify control-plane that a new agent version exists.
+  VERSION_RELEASE_WEBHOOK_URL: ${{ secrets.VERSION_RELEASE_WEBHOOK_URL }}
+  VERSION_RELEASE_WEBHOOK_SECRET: ${{ secrets.VERSION_RELEASE_WEBHOOK_SECRET }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -60,6 +65,13 @@ jobs:
             echo "version=${VERSION}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Determine build metadata
+        id: meta
+        shell: bash
+        run: |
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -67,7 +79,42 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Build all platforms
-        run: make build-all
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION='${{ steps.version.outputs.version }}'
+          SHA='${{ steps.meta.outputs.sha }}'
+          BUILD_DATE='${{ steps.meta.outputs.build_date }}'
+          echo "Building compute-agent binaries: version=$VERSION sha=$SHA buildDate=$BUILD_DATE"
+
+          mkdir -p dist
+
+          # Keep platform list in sync with Makefile, but embed ldflags for version reporting.
+          PLATFORMS=(
+            "linux/amd64"
+            "linux/arm64"
+            "linux/arm"
+            "darwin/amd64"
+            "darwin/arm64"
+            "windows/amd64"
+          )
+
+          for platform in "${PLATFORMS[@]}"; do
+            os="${platform%%/*}"
+            arch="${platform##*/}"
+            out="dist/backup-agent-${os}-${arch}"
+            if [ "${os}" = "windows" ]; then out="${out}.exe"; fi
+            echo ">> building ${os}/${arch} -> ${out}"
+            GOOS="${os}" GOARCH="${arch}" CGO_ENABLED=0 \
+              go build \
+                -trimpath \
+                -ldflags "-s -w \
+                  -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
+                  -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
+                  -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
+                -o "${out}" \
+                ./cmd/agent
+          done
 
       - name: Create release archive
         run: |
@@ -116,4 +163,42 @@ jobs:
             dist/release/checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify control-plane webhook (version release)
+        if: env.VERSION_RELEASE_WEBHOOK_SECRET != ''
+        env:
+          WEBHOOK_URL: ${{ env.VERSION_RELEASE_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ env.VERSION_RELEASE_WEBHOOK_SECRET }}
+          RAW_VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.meta.outputs.sha }}
+        run: |
+          set -euo pipefail
+          WEBHOOK_URL="${WEBHOOK_URL:-https://monitor.kratos.kregel.host/github-version-release}"
+          BODY=$(python3 - <<'PY'
+          import json, os
+          body = {
+            "source": "compute-release",
+            "repo": os.environ.get("GITHUB_REPOSITORY", ""),
+            "sha": os.environ.get("SHA", ""),
+            "ref": os.environ.get("GITHUB_REF", ""),
+            "runId": os.environ.get("GITHUB_RUN_ID", ""),
+            "runAttempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+            "version": os.environ.get("RAW_VERSION", ""),
+          }
+          print(json.dumps(body, separators=(",",":")))
+          PY
+          )
+          SIG=$(python3 - <<'PY'
+          import hmac, hashlib, os
+          body = os.environ["BODY"].encode("utf-8")
+          secret = os.environ["WEBHOOK_SECRET"].encode("utf-8")
+          print(hmac.new(secret, body, hashlib.sha256).hexdigest())
+          PY
+          )
+          echo "Posting webhook to: $WEBHOOK_URL"
+          curl -fsSL -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Kratos-Signature: sha256=$SIG" \
+            --data "$BODY" \
+            "$WEBHOOK_URL"
 
