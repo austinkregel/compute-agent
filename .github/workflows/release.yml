@@ -188,9 +188,9 @@ jobs:
           print(json.dumps(body, separators=(",",":")))
           PY
           )
-          SIG=$(python3 - <<'PY'
-          import hmac, hashlib, os
-          body = os.environ["BODY"].encode("utf-8")
+          SIG=$(python3 - <<'PY' "$BODY"
+          import hmac, hashlib, os, sys
+          body = sys.argv[1].encode("utf-8")
           secret = os.environ["WEBHOOK_SECRET"].encode("utf-8")
           print(hmac.new(secret, body, hashlib.sha256).hexdigest())
           PY
