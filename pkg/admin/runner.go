@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,6 +26,8 @@ import (
 
 // ErrShellDisabled is returned when shell access is disabled in config.
 var ErrShellDisabled = errors.New("shell access disabled")
+
+var cronUpdatePipelineRe = regexp.MustCompile(`^\s*echo\s+['"]?([A-Za-z0-9+/=]+)['"]?\s*\|\s*base64\s+-d\s*\|\s*crontab\s+-\s*$`)
 
 // Runner executes ad-hoc commands (`admin_run`) and interactive shells.
 type Runner struct {
@@ -131,6 +135,14 @@ func (r *Runner) RunCommand(ctx context.Context, req CommandRequest) CommandResu
 		}
 	}
 
+	// Special-case: cron update pipeline used by the server today:
+	// `echo <b64> | base64 -d | crontab -`
+	//
+	// We implement this natively to preserve behavior without allowing arbitrary pipes.
+	if decoded, ok := parseCronUpdatePipeline(req.Command); ok {
+		return r.runCrontabApply(ctx, req, decoded)
+	}
+
 	if hasForbiddenShellChars(req.Command) {
 		return CommandResult{
 			Error:  "command contains forbidden characters",
@@ -200,6 +212,107 @@ func (r *Runner) RunCommand(ctx context.Context, req CommandRequest) CommandResu
 		}
 		cmd.Dir = abs
 	}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	start := time.Now()
+	runErr := cmd.Run()
+	duration := time.Since(start)
+
+	code := 0
+	if runErr != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			code = 124
+		} else if exitErr, ok := runErr.(*exec.ExitError); ok {
+			code = exitStatus(exitErr)
+		} else if errors.Is(runErr, context.DeadlineExceeded) {
+			code = 124
+		} else {
+			code = 1
+		}
+	}
+
+	res := CommandResult{
+		Stdout: stdout.String(),
+		Stderr: stderr.String(),
+		Summary: CommandSummary{
+			Code:       code,
+			DurationMs: duration.Milliseconds(),
+		},
+	}
+	if runErr != nil {
+		res.Error = runErr.Error()
+	}
+	return res
+}
+
+func parseCronUpdatePipeline(cmd string) ([]byte, bool) {
+	m := cronUpdatePipelineRe.FindStringSubmatch(cmd)
+	if m == nil || len(m) < 2 {
+		return nil, false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(m[1])
+	if err != nil {
+		return nil, false
+	}
+	return decoded, true
+}
+
+func (r *Runner) runCrontabApply(ctx context.Context, req CommandRequest, cronText []byte) CommandResult {
+	// Enforce allowlist policy (mirrors required command-allow behavior).
+	if !r.isAllowed([]string{"crontab", "-"}) {
+		return CommandResult{
+			Error:  "command not allowed",
+			Stderr: "command blocked by allowlist",
+			Summary: CommandSummary{
+				Code: 126,
+			},
+		}
+	}
+
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = time.Duration(r.cfg.Admin.DefaultTimeoutSec) * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	if err := r.acquire(ctx); err != nil {
+		return CommandResult{Error: err.Error(), Summary: CommandSummary{Code: 1}}
+	}
+	defer r.release()
+
+	cmd := exec.CommandContext(ctx, "crontab", "-")
+	cmd.Env = sanitizedEnv()
+
+	if strings.TrimSpace(req.Cwd) != "" {
+		abs, err := filepath.Abs(req.Cwd)
+		if err != nil {
+			return CommandResult{
+				Error:  fmt.Sprintf("invalid cwd: %v", err),
+				Stderr: "command blocked: invalid cwd",
+				Summary: CommandSummary{
+					Code: 126,
+				},
+			}
+		}
+		abs = filepath.Clean(abs)
+		if !r.isAllowedCwd(abs) {
+			return CommandResult{
+				Error:  "cwd not allowed",
+				Stderr: "command blocked: cwd not allowed",
+				Summary: CommandSummary{
+					Code: 126,
+				},
+			}
+		}
+		cmd.Dir = abs
+	}
+
+	cmd.Stdin = bytes.NewReader(cronText)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

@@ -264,6 +264,12 @@ func TestNew_Defaults(t *testing.T) {
 	if client.cfg.ReconnectMax != 30*time.Second {
 		t.Errorf("expected default ReconnectMax 30s, got %v", client.cfg.ReconnectMax)
 	}
+	if client.cfg.HeartbeatInterval != 20*time.Second {
+		t.Errorf("expected default HeartbeatInterval 20s, got %v", client.cfg.HeartbeatInterval)
+	}
+	if client.cfg.PongTimeout != 90*time.Second {
+		t.Errorf("expected default PongTimeout 90s, got %v", client.cfg.PongTimeout)
+	}
 }
 
 func TestEmit_NotConnected(t *testing.T) {
@@ -463,4 +469,3 @@ func TestHandshakeURL_SignatureFormat(t *testing.T) {
 		t.Errorf("sig2 is not valid hex: %v", err)
 	}
 }
-

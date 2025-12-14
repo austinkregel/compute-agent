@@ -2,9 +2,11 @@ package telemetry
 
 import (
 	"context"
+	"runtime"
 	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/load"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -58,17 +60,23 @@ func (p *Publisher) emitSample() {
 	}
 	if vm, err := mem.VirtualMemory(); err == nil {
 		sample.MemPercent = vm.UsedPercent
-		sample.MemUsedBytes = vm.Used
-		sample.MemTotalBytes = vm.Total
 	}
 	if avg, err := load.Avg(); err == nil {
-		sample.Load1 = avg.Load1
-		sample.Load5 = avg.Load5
-		sample.Load15 = avg.Load15
+		// requirements.md expects a single `load` value (Node parity).
+		// We use the 1-minute load average as the closest match.
+		sample.Load = avg.Load1
 	}
 	if hi, err := host.Info(); err == nil {
 		sample.UptimeSec = hi.Uptime
-		sample.Hostname = hi.Hostname
+	}
+
+	mount := "/"
+	if runtime.GOOS == "windows" {
+		mount = `C:\`
+	}
+	if usage, err := disk.Usage(mount); err == nil {
+		v := usage.UsedPercent
+		sample.DiskPercent = &v
 	}
 
 	if err := p.emitter.Emit("stats", map[string]any{"data": sample}); err != nil {
@@ -78,14 +86,10 @@ func (p *Publisher) emitSample() {
 
 // StatsSample defines the schema sent to the control plane.
 type StatsSample struct {
-	CPUPercent    float64 `json:"cpu"`
-	MemPercent    float64 `json:"mem"`
-	MemUsedBytes  uint64  `json:"memUsedBytes"`
-	MemTotalBytes uint64  `json:"memTotalBytes"`
-	Load1         float64 `json:"load1"`
-	Load5         float64 `json:"load5"`
-	Load15        float64 `json:"load15"`
-	UptimeSec     uint64  `json:"uptimeSec"`
-	Hostname      string  `json:"hostname"`
-	Timestamp     string  `json:"ts"`
+	CPUPercent  float64  `json:"cpu"`
+	MemPercent  float64  `json:"mem"`
+	Load        float64  `json:"load"`
+	DiskPercent *float64 `json:"diskPercent,omitempty"`
+	UptimeSec   uint64   `json:"uptimeSec,omitempty"`
+	Timestamp   string   `json:"ts"`
 }

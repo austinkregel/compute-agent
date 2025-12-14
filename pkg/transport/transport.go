@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sio "github.com/karagenc/socket.io-go"
@@ -33,14 +34,16 @@ type Emitter interface {
 
 // Config configures the socket transport.
 type Config struct {
-	ServerURL     string
-	ClientID      string
-	AuthToken     string
-	Namespace     string
-	SocketPath    string
-	SkipTLSVerify bool
-	ReconnectMin  time.Duration
-	ReconnectMax  time.Duration
+	ServerURL         string
+	ClientID          string
+	AuthToken         string
+	Namespace         string
+	SocketPath        string
+	SkipTLSVerify     bool
+	ReconnectMin      time.Duration
+	ReconnectMax      time.Duration
+	HeartbeatInterval time.Duration
+	PongTimeout       time.Duration
 }
 
 // Handlers capture callbacks for server-originated events.
@@ -118,6 +121,11 @@ type Client struct {
 
 	socketMu sync.RWMutex
 	socket   sio.ClientSocket
+
+	// lastTraffic stores the unix nano timestamp of the last inbound/outbound
+	// control-plane traffic. A value of 0 means "not connected / unknown".
+	lastTraffic atomic.Int64
+	helloAcked  atomic.Bool
 }
 
 // New builds a transport client with default backoff settings.
@@ -142,6 +150,12 @@ func New(cfg Config, log *logging.Logger, handlers Handlers) (*Client, error) {
 	}
 	if cfg.ReconnectMax == 0 {
 		cfg.ReconnectMax = 30 * time.Second
+	}
+	if cfg.HeartbeatInterval == 0 {
+		cfg.HeartbeatInterval = 20 * time.Second
+	}
+	if cfg.PongTimeout == 0 {
+		cfg.PongTimeout = 90 * time.Second
 	}
 	baseURL, err := buildBaseURL(cfg.ServerURL, cfg.SocketPath)
 	if err != nil {
@@ -177,11 +191,19 @@ func (c *Client) Run(ctx context.Context) error {
 			c.log.Error("transport connection closed", "error", err)
 		}
 
+		// Reconnect backoff must reset after a successful hello_ack.
+		waitDelay := delay
+		if c.helloAcked.Load() {
+			waitDelay = c.cfg.ReconnectMin
+			delay = c.cfg.ReconnectMin
+		} else {
+			delay = nextDelay(delay, c.cfg.ReconnectMax)
+		}
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(delay):
-			delay = nextDelay(delay, c.cfg.ReconnectMax)
+		case <-time.After(waitDelay):
 		}
 	}
 }
@@ -193,10 +215,14 @@ func (c *Client) Emit(event string, payload any) error {
 		return ErrNotConnected
 	}
 	sock.Emit(event, payload)
+	c.touchTraffic()
 	return nil
 }
 
 func (c *Client) connectOnce(ctx context.Context) error {
+	c.helloAcked.Store(false)
+	c.lastTraffic.Store(0)
+
 	connectURL, err := c.handshakeURL()
 	if err != nil {
 		return err
@@ -233,10 +259,12 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	socket.OnConnect(func() {
 		c.log.Info("agent socket connected")
 		c.setSocket(socket)
+		c.touchTraffic()
 	})
 	socket.OnDisconnect(func(reason sio.Reason) {
 		c.log.Error("agent socket disconnected", "reason", reason)
 		c.setSocket(nil)
+		c.lastTraffic.Store(0)
 		select {
 		case done <- fmt.Errorf("disconnect: %s", reason):
 		default:
@@ -245,6 +273,10 @@ func (c *Client) connectOnce(ctx context.Context) error {
 
 	c.registerEventHandlers(socket)
 	socket.Connect()
+
+	stop := make(chan struct{})
+	defer close(stop)
+	go c.proactivePingLoop(ctx, stop)
 
 	select {
 	case <-ctx.Done():
@@ -257,6 +289,8 @@ func (c *Client) connectOnce(ctx context.Context) error {
 
 func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
 	socket.OnEvent("hello_ack", func(_ struct{}) {
+		c.helloAcked.Store(true)
+		c.touchTraffic()
 		if c.handlers.Hello != nil {
 			c.handlers.Hello()
 		}
@@ -265,6 +299,7 @@ func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
 	socket.OnEvent("ping", func(msg struct {
 		TS int64 `json:"ts"`
 	}) {
+		c.touchTraffic()
 		_ = c.Emit("pong", map[string]int64{"ts": msg.TS})
 	})
 
@@ -349,6 +384,43 @@ func (c *Client) setSocket(socket sio.ClientSocket) {
 	c.socketMu.Lock()
 	defer c.socketMu.Unlock()
 	c.socket = socket
+}
+
+func (c *Client) touchTraffic() {
+	c.lastTraffic.Store(time.Now().UnixNano())
+}
+
+func (c *Client) proactivePingLoop(ctx context.Context, stop <-chan struct{}) {
+	interval := c.cfg.HeartbeatInterval
+	if interval <= 0 {
+		interval = 20 * time.Second
+	}
+	timeout := c.cfg.PongTimeout
+	if timeout <= 0 {
+		timeout = 90 * time.Second
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-stop:
+			return
+		case <-ticker.C:
+			last := c.lastTraffic.Load()
+			if last == 0 {
+				continue
+			}
+			if time.Since(time.Unix(0, last)) < timeout/2 {
+				continue
+			}
+			// Best-effort proactive ping to avoid idle disconnects.
+			_ = c.Emit("ping", map[string]int64{"ts": time.Now().UnixMilli()})
+		}
+	}
 }
 
 func buildBaseURL(raw, socketPath string) (*url.URL, error) {

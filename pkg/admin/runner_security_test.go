@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -76,6 +77,30 @@ func TestHasForbiddenShellChars(t *testing.T) {
 		if !hasForbiddenShellChars(s) {
 			t.Fatalf("expected forbidden string, got allowed: %q", s)
 		}
+	}
+}
+
+func TestParseCronUpdatePipeline(t *testing.T) {
+	cron := "SHELL=/bin/sh\n* * * * * echo hi\n"
+	b64 := base64.StdEncoding.EncodeToString([]byte(cron))
+
+	tests := []string{
+		"echo " + b64 + " | base64 -d | crontab -",
+		`echo "` + b64 + `" | base64 -d | crontab -`,
+		"  echo   " + b64 + "   |   base64 -d   |  crontab -  ",
+	}
+	for _, cmd := range tests {
+		got, ok := parseCronUpdatePipeline(cmd)
+		if !ok {
+			t.Fatalf("expected pipeline to match: %q", cmd)
+		}
+		if string(got) != cron {
+			t.Fatalf("decoded cron mismatch: got %q want %q", string(got), cron)
+		}
+	}
+
+	if _, ok := parseCronUpdatePipeline("echo " + b64 + " | cat"); ok {
+		t.Fatalf("expected non-cron pipeline to not match")
 	}
 }
 

@@ -13,17 +13,20 @@ import (
 
 // Config captures all runtime knobs for the Go agent.
 type Config struct {
-	ClientID             string             `json:"clientId"`
-	ServerURL            string             `json:"serverUrl"`
-	AuthToken            string             `json:"authToken"`
-	StatsIntervalSec     int                `json:"statsIntervalSec"`
-	HeartbeatIntervalSec int                `json:"heartbeatIntervalSec"`
-	Connectivity         ConnectivityConfig `json:"connectivity"`
-	Admin                AdminConfig        `json:"admin"`
-	Backup               BackupConfig       `json:"backup"`
-	Transport            TransportConfig    `json:"transport"`
-	Logging              LoggingConfig      `json:"logging"`
-	Shell                ShellConfig        `json:"shell"`
+	ClientID             string `json:"clientId"`
+	ServerURL            string `json:"serverUrl"`
+	AuthToken            string `json:"authToken"`
+	StatsIntervalSec     int    `json:"statsIntervalSec"`
+	HeartbeatIntervalSec int    `json:"heartbeatIntervalSec"`
+	// PongTimeoutSec controls when the agent should send proactive pings if idle.
+	// See requirements.md: pongTimeoutSec is 90s by default.
+	PongTimeoutSec int                `json:"pongTimeoutSec"`
+	Connectivity   ConnectivityConfig `json:"connectivity"`
+	Admin          AdminConfig        `json:"admin"`
+	Backup         BackupConfig       `json:"backup"`
+	Transport      TransportConfig    `json:"transport"`
+	Logging        LoggingConfig      `json:"logging"`
+	Shell          ShellConfig        `json:"shell"`
 }
 
 // ConnectivityConfig governs liveness probes (DNS + TCP).
@@ -125,6 +128,9 @@ func (c *Config) applyDefaults() {
 	if c.HeartbeatIntervalSec <= 0 {
 		c.HeartbeatIntervalSec = 20
 	}
+	if c.PongTimeoutSec <= 0 {
+		c.PongTimeoutSec = 90
+	}
 	if c.Connectivity.TCPTestPort == 0 {
 		c.Connectivity.TCPTestPort = 53
 	}
@@ -181,6 +187,11 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("HEARTBEAT_INTERVAL_SEC"); v != "" {
 		if parsed, err := parseInt(v); err == nil {
 			c.HeartbeatIntervalSec = parsed
+		}
+	}
+	if v := os.Getenv("PONG_TIMEOUT_SEC"); v != "" {
+		if parsed, err := parseInt(v); err == nil {
+			c.PongTimeoutSec = parsed
 		}
 	}
 	if v := os.Getenv("ADMIN_ALLOWED_COMMANDS"); v != "" {

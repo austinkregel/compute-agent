@@ -99,14 +99,16 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 	}
 
 	t, err := transport.New(transport.Config{
-		ServerURL:     cfg.ServerURL,
-		ClientID:      cfg.ClientID,
-		AuthToken:     cfg.AuthToken,
-		Namespace:     "/agents",
-		SocketPath:    cfg.Transport.Path,
-		SkipTLSVerify: cfg.Transport.SkipTLSVerify,
-		ReconnectMin:  time.Second,
-		ReconnectMax:  30 * time.Second,
+		ServerURL:         cfg.ServerURL,
+		ClientID:          cfg.ClientID,
+		AuthToken:         cfg.AuthToken,
+		Namespace:         "/agents",
+		SocketPath:        cfg.Transport.Path,
+		SkipTLSVerify:     cfg.Transport.SkipTLSVerify,
+		ReconnectMin:      time.Second,
+		ReconnectMax:      30 * time.Second,
+		HeartbeatInterval: time.Duration(cfg.HeartbeatIntervalSec) * time.Second,
+		PongTimeout:       time.Duration(cfg.PongTimeoutSec) * time.Second,
 	}, log.With("component", "transport"), handlers)
 	if err != nil {
 		return nil, fmt.Errorf("transport: %w", err)
@@ -303,30 +305,71 @@ func (a *Agent) syncAuthorizedKeys(user string) (int, error) {
 	}
 	authFile := filepath.Join(sshDir, "authorized_keys")
 	existing := make(map[string]struct{})
+	var existingLines []string
 	if data, err := os.ReadFile(authFile); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line != "" {
 				existing[line] = struct{}{}
+				existingLines = append(existingLines, line)
 			}
 		}
 	}
 
-	file, err := os.OpenFile(authFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return 0, err
-	}
-	defer file.Close()
-
 	added := 0
+	finalLines := append([]string{}, existingLines...)
 	for _, key := range keys {
 		if _, ok := existing[key]; ok {
 			continue
 		}
-		if _, err := file.WriteString(key + "\n"); err != nil {
-			return added, err
-		}
+		finalLines = append(finalLines, key)
 		added++
 	}
+	if added == 0 {
+		return 0, nil
+	}
+	if err := writeAuthorizedKeysAtomically(authFile, finalLines); err != nil {
+		return added, err
+	}
 	return added, nil
+}
+
+func writeAuthorizedKeysAtomically(path string, lines []string) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "authorized_keys.tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+
+	// Ensure restrictive perms even if umask is permissive.
+	if err := tmp.Chmod(0o600); err != nil {
+		return err
+	}
+
+	content := strings.Join(lines, "\n") + "\n"
+	if _, err := tmp.WriteString(content); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+
+	// Best-effort atomic replacement.
+	if err := os.Rename(tmpName, path); err != nil {
+		// Windows doesn't allow rename-over-existing; remove and retry.
+		_ = os.Remove(path)
+		if err2 := os.Rename(tmpName, path); err2 != nil {
+			return err
+		}
+	}
+	_ = os.Chmod(path, 0o600)
+	return nil
 }

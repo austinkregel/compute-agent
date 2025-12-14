@@ -71,6 +71,5 @@ $RECYCLE.BIN/
 *.test
 *.out
 vendor/
-go.sum
 dist/*
 coverage.*

@@ -106,12 +106,14 @@ func TestLoad_EnvOverrides(t *testing.T) {
 
 	// Set environment variables
 	originalVars := map[string]string{
-		"CLIENT_ID":            os.Getenv("CLIENT_ID"),
-		"SERVER_URL":           os.Getenv("SERVER_URL"),
-		"AUTH_TOKEN":           os.Getenv("AUTH_TOKEN"),
-		"STATS_INTERVAL_SEC":   os.Getenv("STATS_INTERVAL_SEC"),
+		"CLIENT_ID":              os.Getenv("CLIENT_ID"),
+		"SERVER_URL":             os.Getenv("SERVER_URL"),
+		"AUTH_TOKEN":             os.Getenv("AUTH_TOKEN"),
+		"STATS_INTERVAL_SEC":     os.Getenv("STATS_INTERVAL_SEC"),
+		"HEARTBEAT_INTERVAL_SEC": os.Getenv("HEARTBEAT_INTERVAL_SEC"),
+		"PONG_TIMEOUT_SEC":       os.Getenv("PONG_TIMEOUT_SEC"),
 		"ADMIN_ALLOWED_COMMANDS": os.Getenv("ADMIN_ALLOWED_COMMANDS"),
-		"AGENT_SKIP_TLS_VERIFY": os.Getenv("AGENT_SKIP_TLS_VERIFY"),
+		"AGENT_SKIP_TLS_VERIFY":  os.Getenv("AGENT_SKIP_TLS_VERIFY"),
 	}
 	defer func() {
 		for k, v := range originalVars {
@@ -127,6 +129,8 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	os.Setenv("SERVER_URL", "https://env.example.com")
 	os.Setenv("AUTH_TOKEN", "env-token")
 	os.Setenv("STATS_INTERVAL_SEC", "120")
+	os.Setenv("HEARTBEAT_INTERVAL_SEC", "25")
+	os.Setenv("PONG_TIMEOUT_SEC", "100")
 	os.Setenv("ADMIN_ALLOWED_COMMANDS", "echo,uptime,ls")
 	os.Setenv("AGENT_SKIP_TLS_VERIFY", "true")
 
@@ -146,6 +150,12 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	}
 	if loaded.StatsIntervalSec != 120 {
 		t.Errorf("expected env override StatsIntervalSec 120, got %d", loaded.StatsIntervalSec)
+	}
+	if loaded.HeartbeatIntervalSec != 25 {
+		t.Errorf("expected env override HeartbeatIntervalSec 25, got %d", loaded.HeartbeatIntervalSec)
+	}
+	if loaded.PongTimeoutSec != 100 {
+		t.Errorf("expected env override PongTimeoutSec 100, got %d", loaded.PongTimeoutSec)
 	}
 	if len(loaded.Admin.Allowed) != 3 {
 		t.Errorf("expected 3 allowed commands, got %d", len(loaded.Admin.Allowed))
@@ -248,6 +258,9 @@ func TestApplyDefaults(t *testing.T) {
 	if cfg.HeartbeatIntervalSec != 20 {
 		t.Errorf("expected default HeartbeatIntervalSec 20, got %d", cfg.HeartbeatIntervalSec)
 	}
+	if cfg.PongTimeoutSec != 90 {
+		t.Errorf("expected default PongTimeoutSec 90, got %d", cfg.PongTimeoutSec)
+	}
 	if cfg.Connectivity.TCPTestPort != 53 {
 		t.Errorf("expected default TCPTestPort 53, got %d", cfg.Connectivity.TCPTestPort)
 	}
@@ -291,13 +304,14 @@ func TestApplyDefaults(t *testing.T) {
 
 func TestApplyDefaults_RespectsExistingValues(t *testing.T) {
 	cfg := &Config{
-		ClientID:            "test",
-		ServerURL:           "https://example.com",
-		AuthToken:           "token",
-		StatsIntervalSec:    120,
+		ClientID:             "test",
+		ServerURL:            "https://example.com",
+		AuthToken:            "token",
+		StatsIntervalSec:     120,
 		HeartbeatIntervalSec: 40,
+		PongTimeoutSec:       120,
 		Admin: AdminConfig{
-			MaxConcurrent:    5,
+			MaxConcurrent:     5,
 			DefaultTimeoutSec: 60,
 		},
 		Transport: TransportConfig{
@@ -316,6 +330,9 @@ func TestApplyDefaults_RespectsExistingValues(t *testing.T) {
 	}
 	if cfg.HeartbeatIntervalSec != 40 {
 		t.Errorf("expected HeartbeatIntervalSec to remain 40, got %d", cfg.HeartbeatIntervalSec)
+	}
+	if cfg.PongTimeoutSec != 120 {
+		t.Errorf("expected PongTimeoutSec to remain 120, got %d", cfg.PongTimeoutSec)
 	}
 	if cfg.Admin.MaxConcurrent != 5 {
 		t.Errorf("expected MaxConcurrent to remain 5, got %d", cfg.Admin.MaxConcurrent)
@@ -364,4 +381,3 @@ func TestLoad_WithEnvLogFile(t *testing.T) {
 		t.Errorf("expected Logging.FilePath '/custom/log/path.log', got %q", loaded.Logging.FilePath)
 	}
 }
-
