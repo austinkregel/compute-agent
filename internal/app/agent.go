@@ -96,6 +96,7 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		BackupPlan:  agent.handleBackupPlan,
 		BackupStart: agent.handleBackupStart,
 		SyncKeys:    agent.handleSyncKeys,
+		UpdateAgent: agent.handleAgentUpdate,
 	}
 
 	t, err := transport.New(transport.Config{
@@ -151,6 +152,23 @@ func (a *Agent) handleHello() {
 }
 
 func (a *Agent) handleAdminRun(msg transport.AdminCommand) {
+	reqID := fmt.Sprintf("admin-%d", time.Now().UnixNano())
+	cmdBase, cmdPreview, cmdTruncated := summarizeCommandForLog(msg.Cmd.Command)
+	tokenSummary := summarizeTokenForLog(msg.Token)
+	timeoutSec := msg.Cmd.TimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = a.cfg.Admin.DefaultTimeoutSec
+	}
+	a.log.Info("admin_run received",
+		"reqId", reqID,
+		"commandBase", cmdBase,
+		"commandPreview", cmdPreview,
+		"commandTruncated", cmdTruncated,
+		"cwd", strings.TrimSpace(msg.Cmd.Cwd),
+		"timeoutSec", timeoutSec,
+		"token", tokenSummary,
+	)
+
 	if a.cfg.Admin.RequireToken {
 		expected := a.cfg.Admin.CommandToken
 		if expected == "" || subtle.ConstantTimeCompare([]byte(msg.Token), []byte(expected)) != 1 {
@@ -161,12 +179,14 @@ func (a *Agent) handleAdminRun(msg transport.AdminCommand) {
 				},
 				Error: "unauthorized",
 			}
-			_ = a.transport.Emit("admin_result", map[string]any{
+			if err := a.transport.Emit("admin_result", map[string]any{
 				"token":   msg.Token,
 				"command": msg.Cmd.Command,
 				"result":  res,
-			})
-			a.log.Warn("blocked unauthorized admin_run", "command", msg.Cmd.Command)
+			}); err != nil {
+				a.log.Error("failed to emit admin_result for unauthorized admin_run", "reqId", reqID, "error", err)
+			}
+			a.log.Warn("blocked unauthorized admin_run", "reqId", reqID, "commandBase", cmdBase, "token", tokenSummary)
 			return
 		}
 	}
@@ -177,13 +197,22 @@ func (a *Agent) handleAdminRun(msg transport.AdminCommand) {
 		Timeout: time.Duration(msg.Cmd.TimeoutSec) * time.Second,
 	}
 	res := a.admin.RunCommand(a.ctxOrBackground(), req)
+	a.log.Info("admin_run completed",
+		"reqId", reqID,
+		"commandBase", cmdBase,
+		"exitCode", res.Summary.Code,
+		"durationMs", res.Summary.DurationMs,
+		"stdoutBytes", len(res.Stdout),
+		"stderrBytes", len(res.Stderr),
+		"error", res.Error,
+	)
 	payload := map[string]any{
 		"token":   msg.Token,
 		"command": msg.Cmd.Command,
 		"result":  res,
 	}
 	if err := a.transport.Emit("admin_result", payload); err != nil {
-		a.log.Error("failed to emit admin_result", "error", err)
+		a.log.Error("failed to emit admin_result", "reqId", reqID, "error", err)
 	}
 }
 
@@ -242,6 +271,30 @@ func (a *Agent) handleSyncKeys(msg transport.SyncKeysRequest) {
 	}
 }
 
+func (a *Agent) handleAgentUpdate(msg transport.UpdateAgentRequest) {
+	// Run update asynchronously; downloading/extracting can take time.
+	go func() {
+		repo := strings.TrimSpace(msg.Repo)
+		if repo == "" {
+			repo = "austinkregel/compute-agent"
+		}
+		tag := strings.TrimSpace(msg.Tag)
+
+		a.log.Info("agent update requested", "repo", repo, "tag", tag)
+		result := a.trySelfUpdate(a.ctxOrBackground(), repo, tag)
+
+		// Best-effort result emit. If we successfully exec() on unix, this won't run.
+		_ = a.transport.Emit("agent_update_result", map[string]any{
+			"ok":     result.OK,
+			"repo":   repo,
+			"tag":    result.Tag,
+			"error":  result.Error,
+			"detail": result.Detail,
+			"ts":     time.Now().UTC().Format(time.RFC3339Nano),
+		})
+	}()
+}
+
 func (a *Agent) emitShellOutput(session string, data []byte) {
 	_ = a.transport.Emit("shell_output", map[string]any{
 		"session": session,
@@ -262,6 +315,45 @@ func (a *Agent) ctxOrBackground() context.Context {
 		return a.ctx
 	}
 	return context.Background()
+}
+
+func summarizeTokenForLog(token string) string {
+	t := strings.TrimSpace(token)
+	if t == "" {
+		return ""
+	}
+	if len(t) <= 10 {
+		return t
+	}
+	// Avoid leaking full tokens into logs; keep enough for correlation.
+	return t[:4] + "…" + t[len(t)-4:]
+}
+
+func summarizeCommandForLog(cmd string) (base string, preview string, truncated bool) {
+	s := strings.TrimSpace(cmd)
+	if s == "" {
+		return "", "", false
+	}
+
+	// Special-case the cron update pipeline to avoid logging b64 payloads.
+	if strings.Contains(s, "base64") && strings.Contains(s, "crontab") && strings.Contains(s, "echo") && strings.Contains(s, "|") {
+		fields := strings.Fields(s)
+		if len(fields) > 0 {
+			base = fields[0]
+		}
+		return base, "cron update pipeline (redacted)", true
+	}
+
+	fields := strings.Fields(s)
+	if len(fields) > 0 {
+		base = fields[0]
+	}
+
+	const maxPreview = 120
+	if len(s) > maxPreview {
+		return base, s[:maxPreview] + "…", true
+	}
+	return base, s, false
 }
 
 func (a *Agent) syncAuthorizedKeys(user string) (int, error) {

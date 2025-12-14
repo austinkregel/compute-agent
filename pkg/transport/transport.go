@@ -57,6 +57,7 @@ type Handlers struct {
 	BackupPlan  func(BackupRequest)
 	BackupStart func(BackupRequest)
 	SyncKeys    func(SyncKeysRequest)
+	UpdateAgent func(UpdateAgentRequest)
 }
 
 // AdminCommand mirrors the payload emitted by the control plane.
@@ -109,6 +110,14 @@ type BackupRequest struct {
 // SyncKeysRequest contains GitHub username for authorized_keys sync.
 type SyncKeysRequest struct {
 	User string `json:"user"`
+}
+
+// UpdateAgentRequest instructs the agent to self-update from GitHub releases.
+// Server will typically send { repo: "austinkregel/compute-agent", tag?: "vX.Y.Z" }.
+type UpdateAgentRequest struct {
+	Repo string `json:"repo"`
+	Tag  string `json:"tag"`
+	At   string `json:"at"`
 }
 
 // Client maintains the socket.io/WebSocket session to the control plane.
@@ -215,6 +224,7 @@ func (c *Client) Emit(event string, payload any) error {
 		return ErrNotConnected
 	}
 	payload = ensureTypeCompat(payload)
+	c.log.Debug("emit event", "event", event)
 	sock.Emit(event, payload)
 	c.touchTraffic()
 	return nil
@@ -292,6 +302,7 @@ func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
 	socket.OnEvent("hello_ack", func(_ struct{}) {
 		c.helloAcked.Store(true)
 		c.touchTraffic()
+		c.log.Debug("recv event", "event", "hello_ack")
 		if c.handlers.Hello != nil {
 			c.handlers.Hello()
 		}
@@ -301,49 +312,74 @@ func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
 		TS int64 `json:"ts"`
 	}) {
 		c.touchTraffic()
+		c.log.Debug("recv event", "event", "ping", "ts", msg.TS)
 		_ = c.Emit("pong", map[string]int64{"ts": msg.TS})
 	})
 
 	socket.OnEvent("admin_run", func(msg AdminCommand) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "admin_run")
 		if c.handlers.AdminRun != nil {
 			c.handlers.AdminRun(msg)
 		}
 	})
 
 	socket.OnEvent("shell_start", func(msg ShellStart) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "shell_start", "session", msg.Session)
 		if c.handlers.ShellStart != nil {
 			c.handlers.ShellStart(msg)
 		}
 	})
 	socket.OnEvent("shell_input", func(msg ShellInput) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "shell_input", "session", msg.Session, "bytes", len(msg.Data))
 		if c.handlers.ShellInput != nil {
 			c.handlers.ShellInput(msg)
 		}
 	})
 	socket.OnEvent("shell_resize", func(msg ShellResize) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "shell_resize", "session", msg.Session, "cols", msg.Cols, "rows", msg.Rows)
 		if c.handlers.ShellResize != nil {
 			c.handlers.ShellResize(msg)
 		}
 	})
 	socket.OnEvent("shell_close", func(msg ShellClose) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "shell_close", "session", msg.Session)
 		if c.handlers.ShellClose != nil {
 			c.handlers.ShellClose(msg)
 		}
 	})
 
 	socket.OnEvent("backup_plan", func(msg BackupRequest) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "backup_plan", "planId", msg.PlanID)
 		if c.handlers.BackupPlan != nil {
 			c.handlers.BackupPlan(msg)
 		}
 	})
 	socket.OnEvent("backup_start", func(msg BackupRequest) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "backup_start", "planId", msg.PlanID)
 		if c.handlers.BackupStart != nil {
 			c.handlers.BackupStart(msg)
 		}
 	})
 	socket.OnEvent("sync_keys", func(msg SyncKeysRequest) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "sync_keys", "user", msg.User)
 		if c.handlers.SyncKeys != nil {
 			c.handlers.SyncKeys(msg)
+		}
+	})
+
+	socket.OnEvent("agent_update", func(msg UpdateAgentRequest) {
+		c.touchTraffic()
+		c.log.Info("recv event", "event", "agent_update", "repo", msg.Repo, "tag", msg.Tag)
+		if c.handlers.UpdateAgent != nil {
+			c.handlers.UpdateAgent(msg)
 		}
 	})
 }

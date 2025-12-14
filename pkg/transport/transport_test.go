@@ -370,6 +370,9 @@ func TestRegisterEventHandlers(t *testing.T) {
 		SyncKeys: func(SyncKeysRequest) {
 			handlersCalled["sync_keys"] = true
 		},
+		UpdateAgent: func(UpdateAgentRequest) {
+			handlersCalled["agent_update"] = true
+		},
 	}
 
 	client, err := New(cfg, nil, handlers)
@@ -404,6 +407,9 @@ func TestRegisterEventHandlers(t *testing.T) {
 	}
 	if client.handlers.SyncKeys == nil {
 		t.Error("SyncKeys handler not set")
+	}
+	if client.handlers.UpdateAgent == nil {
+		t.Error("UpdateAgent handler not set")
 	}
 }
 
