@@ -4,9 +4,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
+
+const defaultRotateMaxBytes int64 = 10 * 1024 * 1024
 
 // Logger wraps slog.Logger so packages do not depend on slog directly.
 type Logger struct {
@@ -21,6 +24,88 @@ type Options struct {
 	Level string
 }
 
+type rotatingFile struct {
+	path    string
+	maxSize int64
+
+	mu   sync.Mutex
+	file *os.File
+	size int64
+}
+
+func newRotatingFile(path string, maxSize int64) (*rotatingFile, error) {
+	if maxSize <= 0 {
+		maxSize = defaultRotateMaxBytes
+	}
+	// Ensure parent directory exists.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	r := &rotatingFile{path: path, maxSize: maxSize}
+	if err := r.openOrCreate(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func (r *rotatingFile) openOrCreate() error {
+	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	info, statErr := f.Stat()
+	if statErr == nil {
+		r.size = info.Size()
+	}
+	r.file = f
+	return nil
+}
+
+func (r *rotatingFile) rotateLocked() error {
+	if r.file != nil {
+		_ = r.file.Close()
+		r.file = nil
+	}
+	rotated := r.path + ".1"
+	_ = os.Remove(rotated)
+	// Best-effort: rename current log to .1 if it exists.
+	if _, err := os.Stat(r.path); err == nil {
+		_ = os.Rename(r.path, rotated)
+	}
+	r.size = 0
+	return r.openOrCreate()
+}
+
+func (r *rotatingFile) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.file == nil {
+		if err := r.openOrCreate(); err != nil {
+			return 0, err
+		}
+	}
+	if r.size+int64(len(p)) > r.maxSize {
+		if err := r.rotateLocked(); err != nil {
+			return 0, err
+		}
+	}
+	n, err := r.file.Write(p)
+	r.size += int64(n)
+	return n, err
+}
+
+func (r *rotatingFile) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.file == nil {
+		return nil
+	}
+	err := r.file.Close()
+	r.file = nil
+	return err
+}
+
 // New builds a slog-backed logger writing JSON to stdout and, optionally, to a file.
 func New(opts Options) (*Logger, error) {
 	level := parseLevel(opts.Level)
@@ -28,12 +113,12 @@ func New(opts Options) (*Logger, error) {
 	var closer io.Closer
 
 	if opts.File != "" {
-		f, err := os.OpenFile(opts.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		rot, err := newRotatingFile(opts.File, defaultRotateMaxBytes)
 		if err != nil {
 			return nil, err
 		}
-		writer = io.MultiWriter(os.Stdout, f)
-		closer = f
+		writer = io.MultiWriter(os.Stdout, rot)
+		closer = rot
 	}
 
 	handler := slog.NewJSONHandler(writer, &slog.HandlerOptions{Level: level})

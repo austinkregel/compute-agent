@@ -1,12 +1,17 @@
 package backup
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +59,7 @@ func (c *Coordinator) Plan(ctx context.Context, req transport.BackupRequest) err
 	}
 
 	c.jobs.Store(req.PlanID, rec)
+	_ = c.persistPlan(req.PlanID, rec) // best-effort
 	payload := map[string]any{
 		"planId":     req.PlanID,
 		"job":        req,
@@ -72,81 +78,39 @@ func (c *Coordinator) Plan(ctx context.Context, req transport.BackupRequest) err
 func (c *Coordinator) Run(ctx context.Context, req transport.BackupRequest) error {
 	val, ok := c.jobs.Load(req.PlanID)
 	if !ok {
+		if rec, err := c.loadPlan(req.PlanID); err == nil && rec != nil {
+			c.jobs.Store(req.PlanID, rec)
+			val = rec
+			ok = true
+		}
+	}
+	if !ok {
 		return c.emitError(req.PlanID, fmt.Errorf("unknown plan %s", req.PlanID))
 	}
+
 	rec := val.(*jobRecord)
-	start := time.Now()
-
-	if strings.TrimSpace(req.DestRoot) == "" {
-		return c.emitError(req.PlanID, errors.New("destRoot required"))
+	if strings.TrimSpace(req.Host) != "" {
+		return c.runRemote(ctx, req, rec)
 	}
-	destRootAbs, err := filepath.Abs(req.DestRoot)
-	if err != nil {
-		return c.emitError(req.PlanID, fmt.Errorf("invalid destRoot: %w", err))
-	}
-	destRootAbs = filepath.Clean(destRootAbs)
-	if !c.isAllowedDestRoot(destRootAbs) {
-		return c.emitError(req.PlanID, fmt.Errorf("destRoot %q not allowed", req.DestRoot))
-	}
-
-	var (
-		filesCompleted int
-		bytesCopied    int64
-	)
-	for _, file := range rec.Files {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		destPath, derr := safeJoin(destRootAbs, file.Relative)
-		if derr != nil {
-			return c.emitError(req.PlanID, fmt.Errorf("copy %s: %w", file.Relative, derr))
-		}
-		if err := copyFile(file.Source, destPath); err != nil {
-			return c.emitError(req.PlanID, fmt.Errorf("copy %s: %w", file.Relative, err))
-		}
-		filesCompleted++
-		bytesCopied += file.Size
-		percent := float64(filesCompleted) / float64(max(1, rec.TotalFiles)) * 100
-		progress := map[string]any{
-			"planId":           req.PlanID,
-			"file":             file.Relative,
-			"op":               "copy",
-			"percent":          percent,
-			"transferredBytes": bytesCopied,
-			"filesCompleted":   filesCompleted,
-		}
-		_ = c.emitter.Emit("backup_progress", progress)
-	}
-
-	duration := time.Since(start)
-	complete := map[string]any{
-		"planId":           req.PlanID,
-		"ok":               true,
-		"ms":               duration.Milliseconds(),
-		"transferredBytes": bytesCopied,
-	}
-	return c.emitter.Emit("backup_complete", complete)
+	return c.runLocal(ctx, req, rec)
 }
 
 func (c *Coordinator) generatePlan(ctx context.Context, req transport.BackupRequest) (*jobRecord, error) {
 	if len(req.SourceDirs) == 0 {
 		return nil, errors.New("no source directories provided")
 	}
-	if req.Host != "" {
-		return nil, errors.New("remote host backups not yet supported")
-	}
 	if strings.TrimSpace(req.DestRoot) == "" {
 		return nil, errors.New("destRoot required")
 	}
-	destRootAbs, err := filepath.Abs(req.DestRoot)
-	if err != nil {
-		return nil, fmt.Errorf("invalid destRoot: %w", err)
-	}
-	destRootAbs = filepath.Clean(destRootAbs)
-	if !c.isAllowedDestRoot(destRootAbs) {
-		return nil, fmt.Errorf("destRoot %q not allowed", req.DestRoot)
+	if strings.TrimSpace(req.Host) == "" {
+		destRootAbs, err := filepath.Abs(req.DestRoot)
+		if err != nil {
+			return nil, fmt.Errorf("invalid destRoot: %w", err)
+		}
+		destRootAbs = filepath.Clean(destRootAbs)
+		if !c.isAllowedDestRoot(destRootAbs) {
+			return nil, fmt.Errorf("destRoot %q not allowed", req.DestRoot)
+		}
 	}
 
 	patterns := normalizeGlobs(req.IgnoreGlobs)
@@ -200,6 +164,247 @@ func (c *Coordinator) generatePlan(ctx context.Context, req transport.BackupRequ
 		}
 	}
 	return rec, nil
+}
+
+func (c *Coordinator) runLocal(ctx context.Context, req transport.BackupRequest, rec *jobRecord) error {
+	start := time.Now()
+
+	if strings.TrimSpace(req.DestRoot) == "" {
+		return c.emitError(req.PlanID, errors.New("destRoot required"))
+	}
+	destRootAbs, err := filepath.Abs(req.DestRoot)
+	if err != nil {
+		return c.emitError(req.PlanID, fmt.Errorf("invalid destRoot: %w", err))
+	}
+	destRootAbs = filepath.Clean(destRootAbs)
+	if !c.isAllowedDestRoot(destRootAbs) {
+		return c.emitError(req.PlanID, fmt.Errorf("destRoot %q not allowed", req.DestRoot))
+	}
+
+	var (
+		filesCompleted int
+		bytesCopied    int64
+		lastEmit       time.Time
+		lastPersist    time.Time
+	)
+
+	for _, file := range rec.Files {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		destPath, derr := safeJoin(destRootAbs, file.Relative)
+		if derr != nil {
+			return c.emitError(req.PlanID, fmt.Errorf("copy %s: %w", file.Relative, derr))
+		}
+
+		baseBytes := bytesCopied
+		emitProgress := func(now time.Time, copiedThisFile int64, done bool) {
+			bytesCopied = baseBytes + copiedThisFile
+			if done || lastEmit.IsZero() || now.Sub(lastEmit) >= time.Second {
+				percent := float64(bytesCopied) / float64(max64(1, rec.TotalBytes)) * 100
+				progress := map[string]any{
+					"planId":           req.PlanID,
+					"file":             file.Relative,
+					"op":               "copy",
+					"percent":          percent,
+					"transferredBytes": bytesCopied,
+					"filesCompleted":   filesCompleted,
+				}
+				_ = c.emitter.Emit("backup_progress", progress)
+				lastEmit = now
+			}
+			if done || lastPersist.IsZero() || now.Sub(lastPersist) >= time.Second {
+				_ = c.persistProgress(req.PlanID, file.Relative, bytesCopied)
+				lastPersist = now
+			}
+		}
+
+		emitProgress(time.Now(), 0, false)
+		if err := copyFileWithProgress(ctx, file.Source, destPath, func(copied int64, done bool) {
+			emitProgress(time.Now(), copied, done)
+		}); err != nil {
+			return c.emitError(req.PlanID, fmt.Errorf("copy %s: %w", file.Relative, err))
+		}
+
+		filesCompleted++
+		emitProgress(time.Now(), file.Size, true)
+	}
+
+	duration := time.Since(start)
+	complete := map[string]any{
+		"planId":           req.PlanID,
+		"ok":               true,
+		"ms":               duration.Milliseconds(),
+		"transferredBytes": bytesCopied,
+	}
+	_ = c.persistProgress(req.PlanID, "", bytesCopied)
+	return c.emitter.Emit("backup_complete", complete)
+}
+
+func (c *Coordinator) runRemote(ctx context.Context, req transport.BackupRequest, rec *jobRecord) error {
+	start := time.Now()
+
+	if strings.TrimSpace(req.Host) == "" {
+		return c.emitError(req.PlanID, errors.New("host required for remote backup"))
+	}
+	if strings.TrimSpace(req.DestRoot) == "" {
+		return c.emitError(req.PlanID, errors.New("destRoot required"))
+	}
+	if _, err := exec.LookPath("rsync"); err != nil {
+		return c.emitError(req.PlanID, errors.New("rsync not found on PATH"))
+	}
+
+	remote := req.Host
+	if strings.TrimSpace(req.User) != "" {
+		remote = req.User + "@" + req.Host
+	}
+	destRoot := strings.TrimSuffix(req.DestRoot, "/")
+
+	progressRe := regexp.MustCompile(`^\s*([0-9,]+)\s+(\d+)%`)
+
+	var (
+		filesCompleted int
+		bytesCopied    int64
+		lastEmit       time.Time
+		lastPersist    time.Time
+		currentFile    string
+	)
+
+	for _, srcDir := range req.SourceDirs {
+		srcDir = strings.TrimSpace(srcDir)
+		if srcDir == "" {
+			continue
+		}
+		// Mirror local layout: destRoot/<baseOfSourceDir>/...
+		destPath := filepath.ToSlash(filepath.Join(destRoot, filepath.Base(srcDir))) + "/"
+		dest := remote + ":" + destPath
+
+		args := []string{"-a", "--info=progress2", "--out-format=%n"}
+		for _, g := range normalizeGlobs(req.IgnoreGlobs) {
+			args = append(args, "--exclude", g)
+		}
+		if req.Port > 0 {
+			args = append(args, "-e", fmt.Sprintf("ssh -p %d", req.Port))
+		}
+		args = append(args, srcDir+string(filepath.Separator), dest)
+
+		cmd := exec.CommandContext(ctx, "rsync", args...)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return c.emitError(req.PlanID, err)
+		}
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			return c.emitError(req.PlanID, err)
+		}
+
+		if err := cmd.Start(); err != nil {
+			return c.emitError(req.PlanID, err)
+		}
+
+		lines := make(chan string, 256)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			sc := bufio.NewScanner(stdout)
+			for sc.Scan() {
+				lines <- sc.Text()
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			sc := bufio.NewScanner(stderr)
+			for sc.Scan() {
+				lines <- sc.Text()
+			}
+		}()
+		go func() {
+			wg.Wait()
+			close(lines)
+		}()
+
+		waitCh := make(chan error, 1)
+		go func() { waitCh <- cmd.Wait() }()
+
+		bytesBase := bytesCopied
+		var bytesThis int64
+
+		emit := func(now time.Time, done bool) {
+			bytesCopied = bytesBase + bytesThis
+			if done || lastEmit.IsZero() || now.Sub(lastEmit) >= time.Second {
+				percent := float64(bytesCopied) / float64(max64(1, rec.TotalBytes)) * 100
+				if rec.TotalBytes == 0 {
+					percent = 0
+				}
+				progress := map[string]any{
+					"planId":           req.PlanID,
+					"file":             currentFile,
+					"op":               "rsync",
+					"percent":          percent,
+					"transferredBytes": bytesCopied,
+					"filesCompleted":   filesCompleted,
+				}
+				_ = c.emitter.Emit("backup_progress", progress)
+				lastEmit = now
+			}
+			if done || lastPersist.IsZero() || now.Sub(lastPersist) >= time.Second {
+				_ = c.persistProgress(req.PlanID, currentFile, bytesCopied)
+				lastPersist = now
+			}
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				_ = cmd.Process.Kill()
+				return ctx.Err()
+			case err := <-waitCh:
+				emit(time.Now(), true)
+				if err != nil {
+					return c.emitError(req.PlanID, fmt.Errorf("rsync failed: %w", err))
+				}
+				// Move baseline forward after each rsync run.
+				bytesCopied = bytesBase + bytesThis
+				filesCompleted++
+				goto nextSource
+			case line, ok := <-lines:
+				if !ok {
+					continue
+				}
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				if m := progressRe.FindStringSubmatch(line); m != nil {
+					n, perr := parseInt64WithCommas(m[1])
+					if perr == nil {
+						bytesThis = n
+					}
+					emit(time.Now(), false)
+					continue
+				}
+				// Treat other output lines as the current file name, best-effort.
+				currentFile = line
+			}
+		}
+
+	nextSource:
+		continue
+	}
+
+	duration := time.Since(start)
+	complete := map[string]any{
+		"planId":           req.PlanID,
+		"ok":               true,
+		"ms":               duration.Milliseconds(),
+		"transferredBytes": bytesCopied,
+	}
+	_ = c.persistProgress(req.PlanID, "", bytesCopied)
+	return c.emitter.Emit("backup_complete", complete)
 }
 
 func (c *Coordinator) validateSourceDir(dir string) (string, error) {
@@ -313,6 +518,195 @@ func (c *Coordinator) emitError(planID string, err error) error {
 	}
 	_ = c.emitter.Emit("backup_error", payload)
 	return err
+}
+
+type planOnDisk struct {
+	Request    transport.BackupRequest `json:"request"`
+	Files      []fileEntry             `json:"files"`
+	TotalFiles int                     `json:"totalFiles"`
+	TotalBytes int64                   `json:"totalBytes"`
+	Sample     []string                `json:"sample"`
+}
+
+type progressOnDisk struct {
+	PlanID           string `json:"planId"`
+	File             string `json:"file,omitempty"`
+	TransferredBytes int64  `json:"transferredBytes"`
+	Timestamp        string `json:"ts"`
+}
+
+var planIDSanitizeRe = regexp.MustCompile(`[^A-Za-z0-9_.-]+`)
+
+func sanitizePlanID(planID string) string {
+	planID = strings.TrimSpace(planID)
+	if planID == "" {
+		planID = "unknown"
+	}
+	return planIDSanitizeRe.ReplaceAllString(planID, "_")
+}
+
+func (c *Coordinator) planFilePath(planID string) string {
+	return filepath.Join(os.TempDir(), "compute-agent", "backup-plans", sanitizePlanID(planID)+".json")
+}
+
+func (c *Coordinator) progressFilePath(planID string) string {
+	return filepath.Join(os.TempDir(), "compute-agent", "backup-plans", sanitizePlanID(planID)+".state.json")
+}
+
+func (c *Coordinator) persistPlan(planID string, rec *jobRecord) error {
+	path := c.planFilePath(planID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(planOnDisk{
+		Request:    rec.Request,
+		Files:      rec.Files,
+		TotalFiles: rec.TotalFiles,
+		TotalBytes: rec.TotalBytes,
+		Sample:     rec.Sample,
+	})
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(path, data, 0o600)
+}
+
+func (c *Coordinator) loadPlan(planID string) (*jobRecord, error) {
+	path := c.planFilePath(planID)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var pod planOnDisk
+	if err := json.Unmarshal(raw, &pod); err != nil {
+		return nil, err
+	}
+	return &jobRecord{
+		Request:    pod.Request,
+		Files:      pod.Files,
+		TotalFiles: pod.TotalFiles,
+		TotalBytes: pod.TotalBytes,
+		Sample:     pod.Sample,
+	}, nil
+}
+
+func (c *Coordinator) persistProgress(planID, file string, transferredBytes int64) error {
+	path := c.progressFilePath(planID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(progressOnDisk{
+		PlanID:           planID,
+		File:             file,
+		TransferredBytes: transferredBytes,
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(path, data, 0o600)
+}
+
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+
+	if err := tmp.Chmod(perm); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if _, err := tmp.Write([]byte("\n")); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(path)
+		if err2 := os.Rename(tmpName, path); err2 != nil {
+			return err
+		}
+	}
+	_ = os.Chmod(path, perm)
+	return nil
+}
+
+func copyFileWithProgress(ctx context.Context, src, dest string, onProgress func(copied int64, done bool)) error {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	buf := make([]byte, 32*1024)
+	var copied int64
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		n, rerr := in.Read(buf)
+		if n > 0 {
+			wn, werr := out.Write(buf[:n])
+			if werr != nil {
+				return werr
+			}
+			if wn != n {
+				return io.ErrShortWrite
+			}
+			copied += int64(wn)
+			if onProgress != nil {
+				onProgress(copied, false)
+			}
+		}
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				break
+			}
+			return rerr
+		}
+	}
+	if err := out.Sync(); err != nil {
+		return err
+	}
+	if onProgress != nil {
+		onProgress(copied, true)
+	}
+	return nil
+}
+
+func parseInt64WithCommas(s string) (int64, error) {
+	s = strings.ReplaceAll(strings.TrimSpace(s), ",", "")
+	return strconv.ParseInt(s, 10, 64)
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func copyFile(src, dest string) error {

@@ -214,6 +214,7 @@ func (c *Client) Emit(event string, payload any) error {
 	if sock == nil {
 		return ErrNotConnected
 	}
+	payload = ensureTypeCompat(payload)
 	sock.Emit(event, payload)
 	c.touchTraffic()
 	return nil
@@ -449,4 +450,26 @@ func nextDelay(current, max time.Duration) time.Duration {
 		return max
 	}
 	return next
+}
+
+// ensureTypeCompat ensures payloads that include `type` also include legacy `t`,
+// since the server dispatch may check `t || type` during a compatibility window.
+func ensureTypeCompat(payload any) any {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return payload
+	}
+	if _, hasT := m["t"]; hasT {
+		return payload
+	}
+	v, hasType := m["type"]
+	if !hasType {
+		return payload
+	}
+	cp := make(map[string]any, len(m)+1)
+	for k, vv := range m {
+		cp[k] = vv
+	}
+	cp["t"] = v
+	return cp
 }

@@ -291,6 +291,25 @@ func TestEmit_NotConnected(t *testing.T) {
 	}
 }
 
+func TestEnsureTypeCompat_AddsTWithoutMutatingOriginal(t *testing.T) {
+	in := map[string]any{"type": "foo", "x": 1}
+	outAny := ensureTypeCompat(in)
+	out, ok := outAny.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map payload, got %T", outAny)
+	}
+	if out["t"] != "foo" {
+		t.Fatalf("expected t to be populated from type, got %v", out["t"])
+	}
+	if _, ok := in["t"]; ok {
+		t.Fatalf("expected input map to not be mutated")
+	}
+	// Preserve other fields.
+	if out["x"] != 1 {
+		t.Fatalf("expected x to be preserved, got %v", out["x"])
+	}
+}
+
 func TestHTTPTransport_SkipTLSVerify(t *testing.T) {
 	cfg := Config{
 		ServerURL:     "https://example.com",

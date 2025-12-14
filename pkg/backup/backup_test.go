@@ -241,8 +241,8 @@ func TestGeneratePlan_RemoteHost(t *testing.T) {
 	}
 
 	_, err := coord.generatePlan(context.Background(), req)
-	if err == nil {
-		t.Error("expected error for remote host")
+	if err != nil {
+		t.Fatalf("expected remote host plan to succeed, got err: %v", err)
 	}
 }
 
