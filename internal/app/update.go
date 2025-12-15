@@ -108,7 +108,36 @@ func (a *Agent) trySelfUpdate(ctx context.Context, repo string, desiredTag strin
 	if err := cmd.Start(); err != nil {
 		return updateResult{OK: false, Tag: tag, Error: "restart", Detail: err.Error()}
 	}
+	
+	newPID := cmd.Process.Pid
+	a.log.Info("started new process", "pid", newPID)
+	
+	// Verify the new process started successfully before exiting.
+	// Use a goroutine to wait for the process; if it exits quickly, that's a failure.
+	processExited := make(chan error, 1)
+	go func() {
+		processExited <- cmd.Wait()
+	}()
+	
+	// Wait a short time to see if process exits immediately (indicates failure)
+	select {
+	case err := <-processExited:
+		// Process exited quickly - this is bad
+		errMsg := "new process exited immediately"
+		if err != nil {
+			errMsg = fmt.Sprintf("new process exited with error: %v", err)
+		}
+		return updateResult{OK: false, Tag: tag, Error: "restart", Detail: errMsg}
+	case <-time.After(1 * time.Second):
+		// Process is still running after 1 second - good!
+		a.log.Info("new process verified running", "pid", newPID)
+	}
+	
 	// Small delay to reduce reconnect thrash if the supervisor restarts too.
+	// Note: If managed by supervisor, supervisor will restart when this process exits.
+	// The new binary is already in place, so supervisor will start the new version.
+	// However, we've already started the new process manually, so supervisor may
+	// see two processes briefly. This is acceptable as supervisor should handle it.
 	time.Sleep(250 * time.Millisecond)
 	os.Exit(0)
 	return updateResult{OK: true, Tag: tag}
