@@ -2,11 +2,13 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/austinkregel/compute-agent/pkg/config"
 	"github.com/austinkregel/compute-agent/pkg/logging"
+	"github.com/shirou/gopsutil/v3/host"
 )
 
 type mockEmitter struct {
@@ -121,6 +123,24 @@ func TestEmitSample_StatsStructure(t *testing.T) {
 	emitter := &mockEmitter{}
 	pub := NewPublisher(cfg, log, emitter)
 
+	origBattery := getBatteryInfo
+	origTemps := hostSensorsTemperatures
+	t.Cleanup(func() {
+		getBatteryInfo = origBattery
+		hostSensorsTemperatures = origTemps
+	})
+
+	getBatteryInfo = func() (*BatteryInfo, error) {
+		return &BatteryInfo{Devices: []BatteryDevice{
+			{ID: "BAT0", Status: "discharging", Percent: 42.0, TempC: 33.3},
+		}}, nil
+	}
+	hostSensorsTemperatures = func() ([]host.TemperatureStat, error) {
+		return []host.TemperatureStat{
+			{SensorKey: "cpu_thermal", Temperature: 55.5, High: 90, Critical: 100},
+		}, nil
+	}
+
 	pub.emitSample()
 
 	events := emitter.Events()
@@ -156,6 +176,12 @@ func TestEmitSample_StatsStructure(t *testing.T) {
 			if err != nil {
 				t.Errorf("timestamp not in RFC3339 format: %v", err)
 			}
+			if sample.Battery == nil || len(sample.Battery.Devices) == 0 {
+				t.Error("expected battery to be present in sample when collector returns data")
+			}
+			if len(sample.Thermal) == 0 {
+				t.Error("expected thermal to be present in sample when collector returns data")
+			}
 			return
 		}
 		t.Fatalf("expected payload.data to be StatsSample or map, got %T", data)
@@ -169,6 +195,54 @@ func TestEmitSample_StatsStructure(t *testing.T) {
 		}
 	} else {
 		t.Error("expected timestamp 'ts' in stats data")
+	}
+}
+
+func TestEmitSample_OmitsBatteryAndThermalWhenUnavailable(t *testing.T) {
+	cfg := &config.Config{StatsIntervalSec: 60}
+	log, _ := logging.New(logging.Options{Level: "error"})
+	emitter := &mockEmitter{}
+	pub := NewPublisher(cfg, log, emitter)
+
+	origBattery := getBatteryInfo
+	origTemps := hostSensorsTemperatures
+	t.Cleanup(func() {
+		getBatteryInfo = origBattery
+		hostSensorsTemperatures = origTemps
+	})
+
+	getBatteryInfo = func() (*BatteryInfo, error) { return nil, nil }
+	hostSensorsTemperatures = func() ([]host.TemperatureStat, error) { return nil, nil }
+
+	pub.emitSample()
+	events := emitter.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	payload, ok := events[0].payload.(map[string]any)
+	if !ok {
+		t.Fatalf("expected payload to be map[string]any, got %T", events[0].payload)
+	}
+	sampleAny := payload["data"]
+	sample, ok := sampleAny.(StatsSample)
+	if !ok {
+		// If serialization already happened to map, just accept that shape.
+		return
+	}
+
+	b, err := json.Marshal(sample)
+	if err != nil {
+		t.Fatalf("marshal stats sample: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal stats sample: %v", err)
+	}
+	if _, ok := m["battery"]; ok {
+		t.Error("expected battery to be omitted when nil")
+	}
+	if _, ok := m["thermal"]; ok {
+		t.Error("expected thermal to be omitted when empty/nil")
 	}
 }
 

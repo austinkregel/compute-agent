@@ -18,6 +18,12 @@ import (
 	"github.com/austinkregel/compute-agent/pkg/version"
 )
 
+// Function indirections to make telemetry collection testable without depending on host hardware.
+var (
+	hostSensorsTemperatures = host.SensorsTemperatures
+	getBatteryInfo          = getBatteryInfoImpl
+)
+
 // Publisher periodically gathers system metrics and ships them over the transport.
 type Publisher struct {
 	cfg     *config.Config
@@ -89,6 +95,27 @@ func (p *Publisher) emitSample() {
 		sample.Release = hi.PlatformVersion
 		sample.Arch = hi.KernelArch
 		sample.CPUs = int(hi.Procs)
+	}
+
+	// Battery - best effort, omitted on hosts without a battery (most servers).
+	if bi, err := getBatteryInfo(); err == nil && bi != nil {
+		sample.Battery = bi
+	}
+
+	// Thermal sensors - best effort; omitted if not available on this host.
+	if temps, err := hostSensorsTemperatures(); err == nil && len(temps) > 0 {
+		var thermal []ThermalSensor
+		for _, t := range temps {
+			thermal = append(thermal, ThermalSensor{
+				SensorKey:   t.SensorKey,
+				Temperature: t.Temperature,
+				High:        t.High,
+				Critical:    t.Critical,
+			})
+		}
+		if len(thermal) > 0 {
+			sample.Thermal = thermal
+		}
 	}
 
 	// Disk usage - get all mount points
@@ -169,19 +196,58 @@ func (p *Publisher) emitSample() {
 
 // StatsSample defines the schema sent to the control plane.
 type StatsSample struct {
-	AgentVersion string         `json:"agentVersion,omitempty"`
-	CPUPercent float64        `json:"cpu"`
-	Mem        *MemInfo       `json:"mem,omitempty"` // UI expects mem object, not memPercent
-	Load       LoadAvg        `json:"load"`
-	Disk       []DiskInfo     `json:"disk,omitempty"`
-	NetIfaces  []NetInterface `json:"netIfaces,omitempty"`
-	Hostname   string         `json:"hostname,omitempty"`
-	Platform   string         `json:"platform,omitempty"`
-	Release    string         `json:"release,omitempty"`
-	Arch       string         `json:"arch,omitempty"`
-	CPUs       int            `json:"cpus,omitempty"`
-	UptimeSec  uint64         `json:"uptimeSec,omitempty"`
-	Timestamp  string         `json:"ts"`
+	AgentVersion string          `json:"agentVersion,omitempty"`
+	CPUPercent   float64         `json:"cpu"`
+	Mem          *MemInfo        `json:"mem,omitempty"` // UI expects mem object, not memPercent
+	Load         LoadAvg         `json:"load"`
+	Disk         []DiskInfo      `json:"disk,omitempty"`
+	NetIfaces    []NetInterface  `json:"netIfaces,omitempty"`
+	Hostname     string          `json:"hostname,omitempty"`
+	Platform     string          `json:"platform,omitempty"`
+	Release      string          `json:"release,omitempty"`
+	Arch         string          `json:"arch,omitempty"`
+	CPUs         int             `json:"cpus,omitempty"`
+	UptimeSec    uint64          `json:"uptimeSec,omitempty"`
+	Battery      *BatteryInfo    `json:"battery,omitempty"`
+	Thermal      []ThermalSensor `json:"thermal,omitempty"`
+	Timestamp    string          `json:"ts"`
+}
+
+// BatteryInfo is a best-effort snapshot of battery state. It is omitted on hosts without batteries.
+// Units are normalized where possible but may be partially filled depending on platform capabilities.
+type BatteryInfo struct {
+	Devices []BatteryDevice `json:"devices"`
+}
+
+type BatteryDevice struct {
+	ID string `json:"id"`
+
+	// Status is one of: "charging", "discharging", "full", "unknown".
+	Status string `json:"status,omitempty"`
+
+	Percent float64 `json:"percent,omitempty"` // 0..100
+
+	// Energy/power are in Wh/W if available (Linux sysfs exposes µWh/µW; we normalize).
+	EnergyNowWh  float64 `json:"energyNowWh,omitempty"`
+	EnergyFullWh float64 `json:"energyFullWh,omitempty"`
+	PowerNowW    float64 `json:"powerNowW,omitempty"`
+
+	VoltageNowV float64 `json:"voltageNowV,omitempty"`
+	TempC       float64 `json:"tempC,omitempty"`
+
+	CycleCount int64 `json:"cycleCount,omitempty"`
+
+	// Time estimates in seconds, if available/derivable.
+	TimeToEmptySec int64 `json:"timeToEmptySec,omitempty"`
+	TimeToFullSec  int64 `json:"timeToFullSec,omitempty"`
+}
+
+// ThermalSensor mirrors gopsutil's TemperatureStat but nested under stats.
+type ThermalSensor struct {
+	SensorKey   string  `json:"sensorKey"`
+	Temperature float64 `json:"temperature"`
+	High        float64 `json:"sensorHigh,omitempty"`
+	Critical    float64 `json:"sensorCritical,omitempty"`
 }
 
 // MemInfo represents memory statistics
