@@ -268,7 +268,20 @@ type StatsSample struct {
 	UptimeSec    uint64          `json:"uptimeSec,omitempty"`
 	Battery      *BatteryInfo    `json:"battery,omitempty"`
 	Thermal      []ThermalSensor `json:"thermal,omitempty"`
+	Updates            *UpdateInfo    `json:"updates,omitempty"`
+	LastReboot         string         `json:"lastReboot,omitempty"`         // RFC3339 timestamp (UTC)
+	KernelVersion      string         `json:"kernelVersion,omitempty"`
+	SecurityPatchStatus string        `json:"securityPatchStatus,omitempty"`
+	ServiceHealth      *ServiceHealth `json:"serviceHealth,omitempty"`
+	TimeSyncStatus     string         `json:"timeSyncStatus,omitempty"`
 	Timestamp    string          `json:"ts"`
+}
+
+type ServiceHealth struct {
+	Total          int      `json:"total"`
+	Running        int      `json:"running"`
+	Failed         int      `json:"failed"`
+	CriticalFailed []string `json:"criticalFailed,omitempty"`
 }
 
 // BatteryInfo is a best-effort snapshot of battery state. It is omitted on hosts without batteries.

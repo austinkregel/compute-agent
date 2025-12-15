@@ -53,6 +53,7 @@ func readLinuxHwmonTemps() ([]host.TemperatureStat, error) {
 			name = ent.Name()
 		}
 		name = sanitizeKeyPart(name)
+		hwID := sanitizeKeyPart(ent.Name())
 
 		files, err := os.ReadDir(dir)
 		if err != nil {
@@ -71,7 +72,9 @@ func readLinuxHwmonTemps() ([]host.TemperatureStat, error) {
 			// hwmon temps are millidegree Celsius.
 			tempC := float64(raw) / 1000.0
 
-			key := fmt.Sprintf("%s_temp%s", name, nStr)
+			// Include hwmon directory (hwmonX) to avoid collisions on multi-GPU / multi-NVMe hosts
+			// where several devices may share the same sysfs `name` value (e.g., "amdgpu").
+			key := fmt.Sprintf("%s_%s_temp%s", hwID, name, nStr)
 			stat := host.TemperatureStat{
 				SensorKey:   key,
 				Temperature: tempC,
