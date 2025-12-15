@@ -115,6 +115,22 @@ func TestRun_EmitsStats(t *testing.T) {
 	}
 }
 
+func TestEmitNow_EmitsImmediately(t *testing.T) {
+	cfg := &config.Config{StatsIntervalSec: 60}
+	log, _ := logging.New(logging.Options{Level: "error"})
+	emitter := &mockEmitter{}
+	pub := NewPublisher(cfg, log, emitter)
+
+	pub.EmitNow()
+
+	if len(emitter.Events()) != 1 {
+		t.Fatalf("expected 1 emitted event, got %d", len(emitter.Events()))
+	}
+	if emitter.Events()[0].event != "stats" {
+		t.Fatalf("expected event 'stats', got %q", emitter.Events()[0].event)
+	}
+}
+
 func TestEmitSample_StatsStructure(t *testing.T) {
 	cfg := &config.Config{
 		StatsIntervalSec: 60,

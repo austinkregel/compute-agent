@@ -5,6 +5,7 @@ import (
 	"net"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -33,6 +34,7 @@ type Publisher struct {
 	log     *logging.Logger
 	emitter transport.Emitter
 
+	warnMu          sync.Mutex
 	lastBatteryWarn time.Time
 	lastThermalWarn time.Time
 }
@@ -62,6 +64,15 @@ func (p *Publisher) Run(ctx context.Context) error {
 			p.emitSample()
 		}
 	}
+}
+
+// EmitNow emits a stats sample immediately (best effort). This is useful on startup so the
+// control plane learns agentVersion and other metadata without waiting for the next interval tick.
+func (p *Publisher) EmitNow() {
+	if p == nil {
+		return
+	}
+	p.emitSample()
 }
 
 func (p *Publisher) emitSample() {
@@ -218,6 +229,9 @@ func (p *Publisher) rateLimitedWarn(last *time.Time, every time.Duration, msg st
 	if p == nil || p.log == nil {
 		return
 	}
+	p.warnMu.Lock()
+	defer p.warnMu.Unlock()
+
 	now := time.Now()
 	if last == nil || last.IsZero() || now.Sub(*last) >= every {
 		if last != nil {

@@ -54,6 +54,8 @@ type Handlers struct {
 	ShellInput  func(ShellInput)
 	ShellResize func(ShellResize)
 	ShellClose  func(ShellClose)
+	LogTailStart func(LogTailStart)
+	LogTailStop  func(LogTailStop)
 	BackupPlan  func(BackupRequest)
 	BackupStart func(BackupRequest)
 	SyncKeys    func(SyncKeysRequest)
@@ -93,6 +95,17 @@ type ShellResize struct {
 
 // ShellClose signals an operator-initiated close.
 type ShellClose struct {
+	Session string `json:"session"`
+}
+
+// LogTailStart begins streaming the agent log file.
+type LogTailStart struct {
+	Session string `json:"session"`
+	Lines   int    `json:"lines"`
+}
+
+// LogTailStop stops a streaming log tail session.
+type LogTailStop struct {
 	Session string `json:"session"`
 }
 
@@ -350,6 +363,22 @@ func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
 		c.log.Debug("recv event", "event", "shell_close", "session", msg.Session)
 		if c.handlers.ShellClose != nil {
 			c.handlers.ShellClose(msg)
+		}
+	})
+
+	socket.OnEvent("log_tail_start", func(msg LogTailStart) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "log_tail_start", "session", msg.Session, "lines", msg.Lines)
+		if c.handlers.LogTailStart != nil {
+			c.handlers.LogTailStart(msg)
+		}
+	})
+
+	socket.OnEvent("log_tail_stop", func(msg LogTailStop) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "log_tail_stop", "session", msg.Session)
+		if c.handlers.LogTailStop != nil {
+			c.handlers.LogTailStop(msg)
 		}
 	})
 

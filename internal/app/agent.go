@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"strings"
 	"time"
 
@@ -72,6 +73,9 @@ type Agent struct {
 	backups   *backup.Coordinator
 
 	ctx context.Context
+
+	logTailMu sync.Mutex
+	logTail   map[string]*tailHandle // session -> tail handle
 }
 
 // New assembles the agent subsystems from config.
@@ -79,6 +83,7 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 	agent := &Agent{
 		cfg: cfg,
 		log: log,
+		logTail: map[string]*tailHandle{},
 	}
 
 	adminRunner := admin.NewRunner(cfg, log.With("component", "admin"), admin.ShellCallbacks{
@@ -93,6 +98,8 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		ShellInput:  agent.handleShellInput,
 		ShellResize: agent.handleShellResize,
 		ShellClose:  agent.handleShellClose,
+		LogTailStart: agent.handleLogTailStart,
+		LogTailStop:  agent.handleLogTailStop,
 		BackupPlan:  agent.handleBackupPlan,
 		BackupStart: agent.handleBackupStart,
 		SyncKeys:    agent.handleSyncKeys,
@@ -149,6 +156,11 @@ func (a *Agent) Run(ctx context.Context) error {
 
 func (a *Agent) handleHello() {
 	a.log.Info("connected to control plane", "clientId", a.cfg.ClientID)
+	// Emit version/metadata immediately after hello_ack so dashboards don't wait for the next
+	// telemetry tick to learn the agent version.
+	if a.telemetry != nil {
+		a.telemetry.EmitNow()
+	}
 }
 
 func (a *Agent) handleAdminRun(msg transport.AdminCommand) {
