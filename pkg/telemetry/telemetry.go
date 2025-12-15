@@ -104,15 +104,18 @@ func (p *Publisher) emitSample() {
 		}
 	}
 
-	// Host info - get hostname, platform, release, arch, cpus
+	// Host info - get hostname, platform, release, arch
 	if hi, err := host.Info(); err == nil {
 		sample.UptimeSec = hi.Uptime
 		sample.Hostname = hi.Hostname
 		sample.Platform = hi.Platform
 		sample.Release = hi.PlatformVersion
 		sample.Arch = hi.KernelArch
-		sample.CPUs = int(hi.Procs)
 	}
+	
+	// CPU count - use runtime.NumCPU() which returns the number of logical CPUs (cores/threads)
+	// This is more accurate than hi.Procs which represents the number of processes
+	sample.CPUs = runtime.NumCPU()
 
 	// Battery - best effort, omitted on hosts without a battery (most servers).
 	if bi, err := getBatteryInfo(); err != nil {
@@ -124,13 +127,15 @@ func (p *Publisher) emitSample() {
 
 	// Thermal sensors - best effort; omitted if not available on this host.
 	temps, tempsErr := hostSensorsTemperatures()
-	if tempsErr != nil {
-		p.rateLimitedWarn(&p.lastThermalWarn, 10*time.Minute, "thermal telemetry collection failed", "source", "gopsutil", "error", tempsErr)
-	}
 	// If gopsutil returns nothing (common on some hosts) attempt a Linux sysfs fallback.
 	if (tempsErr != nil || len(temps) == 0) && runtime.GOOS == "linux" {
 		if fb, fbErr := sysfsSensorsTemperatures(); fbErr != nil {
-			p.rateLimitedWarn(&p.lastThermalWarn, 10*time.Minute, "thermal telemetry collection failed", "source", "sysfs", "error", fbErr)
+			// Only warn here if we truly have no temps at all (gopsutil returned none and sysfs failed).
+			if len(temps) == 0 {
+				p.rateLimitedWarn(&p.lastThermalWarn, 10*time.Minute, "thermal telemetry collection failed", "source", "sysfs", "error", fbErr)
+			} else {
+				p.log.Debug("thermal telemetry sysfs fallback failed (gopsutil still returned temps)", "error", fbErr, "gopsutilSensors", len(temps))
+			}
 		} else if len(fb) > 0 {
 			temps = fb
 			p.log.Debug("thermal telemetry collected via sysfs fallback", "sensors", len(temps))
@@ -146,7 +151,13 @@ func (p *Publisher) emitSample() {
 		if len(thermal) > 0 {
 			sample.Thermal = thermal
 			p.log.Debug("thermal telemetry collected", "sensors", len(thermal))
+		} else if tempsErr != nil {
+			// gopsutil can return non-fatal errors/warnings alongside data; don't escalate unless empty.
+			p.log.Debug("thermal telemetry had collection warnings", "source", "gopsutil", "error", tempsErr, "rawSensors", len(temps))
 		}
+	} else if tempsErr != nil {
+		// If we got no temps at all, surface the gopsutil error (rate-limited).
+		p.rateLimitedWarn(&p.lastThermalWarn, 10*time.Minute, "thermal telemetry collection failed", "source", "gopsutil", "error", tempsErr)
 	}
 
 	// Disk usage - get all mount points
