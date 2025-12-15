@@ -109,7 +109,7 @@ func (a *Agent) runLogTail(ctx context.Context, session string, lines int, handl
 					return
 				}
 				offset = 0
-				_, _ = a.transport.Emit("log_tail_output", map[string]any{
+				_ = a.transport.Emit("log_tail_output", map[string]any{
 					"session": session,
 					"data":    "\n[log rotated]\n",
 					"ts":      time.Now().UTC().Format(time.RFC3339Nano),
