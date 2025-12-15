@@ -21,6 +21,7 @@ import (
 	"github.com/austinkregel/compute-agent/pkg/logging"
 	"github.com/austinkregel/compute-agent/pkg/telemetry"
 	"github.com/austinkregel/compute-agent/pkg/transport"
+	"github.com/austinkregel/compute-agent/pkg/version"
 )
 
 var githubUserRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,39}$`)
@@ -160,6 +161,51 @@ func (a *Agent) handleHello() {
 	// telemetry tick to learn the agent version.
 	if a.telemetry != nil {
 		a.telemetry.EmitNow()
+	}
+	// Check for updates immediately if internet is available.
+	go a.checkForUpdatesOnConnect()
+}
+
+// checkForUpdatesOnConnect checks for agent updates when connecting to the server.
+// It only runs if internet connectivity is available and the agent is outdated.
+func (a *Agent) checkForUpdatesOnConnect() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	currentVersion := version.Version
+	// Skip update check for dev builds unless explicitly needed
+	if currentVersion == "0.1.0-dev" || strings.Contains(currentVersion, "dev") {
+		a.log.Debug("skipping update check for dev build", "version", currentVersion)
+		return
+	}
+
+	// Default repo for agent updates
+	repo := "austinkregel/compute-agent"
+
+	// Use resolveLatestAsset to check for latest version (it handles GitHub API calls)
+	// We pass empty desiredTag to get the latest release
+	// Note: resolveLatestAsset is in update.go (same package, so we can call it directly)
+	latestTag, _, _, _, err := resolveLatestAsset(ctx, repo, "")
+	if err != nil {
+		// No internet or GitHub unavailable - silently skip
+		a.log.Debug("update check skipped", "reason", "no internet or GitHub unavailable", "error", err)
+		return
+	}
+
+	if latestTag == "" {
+		return
+	}
+
+	// Compare versions - if latest tag is different (and likely newer), trigger update
+	if latestTag != currentVersion {
+		a.log.Info("update available", "current", currentVersion, "latest", latestTag)
+		// Trigger self-update
+		result := a.trySelfUpdate(ctx, repo, latestTag)
+		if !result.OK {
+			a.log.Warn("auto-update failed", "tag", latestTag, "error", result.Error, "detail", result.Detail)
+		}
+	} else {
+		a.log.Debug("agent is up to date", "version", currentVersion)
 	}
 }
 

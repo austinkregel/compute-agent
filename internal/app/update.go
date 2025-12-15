@@ -420,16 +420,10 @@ func copyFileAtomic(src, dest string, mode os.FileMode) error {
 }
 
 func swapExecutable(exePath, stagedPath string) error {
-	// Unix: rename current aside then move staged into place.
-	// Windows: best-effort rename; may fail if locked by the running process.
-	oldPath := exePath + ".old"
-	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(oldPath), ".exe") {
-		oldPath += ".exe"
-	}
-
-	// Best-effort: preserve previous binary.
-	_ = os.Remove(oldPath)
-	_ = os.Rename(exePath, oldPath)
+	// Remove old binary immediately - we don't preserve old versions.
+	// On Unix, we can remove the running binary (it's still in memory).
+	// On Windows, removal may fail if locked, but we try anyway.
+	_ = os.Remove(exePath)
 
 	// Put the new one in place.
 	if err := os.Rename(stagedPath, exePath); err != nil {
