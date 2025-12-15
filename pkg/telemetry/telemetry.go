@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -106,12 +107,9 @@ func (p *Publisher) emitSample() {
 	if temps, err := hostSensorsTemperatures(); err == nil && len(temps) > 0 {
 		var thermal []ThermalSensor
 		for _, t := range temps {
-			thermal = append(thermal, ThermalSensor{
-				SensorKey:   t.SensorKey,
-				Temperature: t.Temperature,
-				High:        t.High,
-				Critical:    t.Critical,
-			})
+			if norm, ok := normalizeThermal(t); ok {
+				thermal = append(thermal, norm)
+			}
 		}
 		if len(thermal) > 0 {
 			sample.Thermal = thermal
@@ -244,10 +242,100 @@ type BatteryDevice struct {
 
 // ThermalSensor mirrors gopsutil's TemperatureStat but nested under stats.
 type ThermalSensor struct {
-	SensorKey   string  `json:"sensorKey"`
+	// SensorKey is the raw sensor identifier as reported by the OS / gopsutil.
+	SensorKey string `json:"sensorKey"`
+	// Component is a coarse grouping ("CPU", "NVMe", "GPU", "ACPI", etc.) derived from SensorKey.
+	// It is best-effort; consumers should tolerate empty values.
+	Component string `json:"component,omitempty"`
+	// Name is a short human-friendly label derived from SensorKey.
+	// It is best-effort; consumers should tolerate empty values.
+	Name        string  `json:"name,omitempty"`
 	Temperature float64 `json:"temperature"`
 	High        float64 `json:"sensorHigh,omitempty"`
 	Critical    float64 `json:"sensorCritical,omitempty"`
+}
+
+// normalizeThermal returns a sanitized thermal sensor payload.
+//
+// Notes on High/Critical:
+// On Linux, gopsutil reads hwmon sysfs `temp*_max` and `temp*_crit` (millidegree Celsius)
+// as documented in the kernel hwmon sysfs interface:
+// https://www.kernel.org/doc/Documentation/hwmon/sysfs-interface
+//
+// Some drivers expose these files but populate them with sentinel/garbage values (e.g., ~65000°C).
+// We drop obviously-nonsensical thresholds so dashboards don't display misleading numbers.
+func normalizeThermal(t host.TemperatureStat) (ThermalSensor, bool) {
+	const (
+		// Anything beyond these bounds is almost certainly a sentinel/driver error for our use case.
+		// (Realistic machine temps are typically in [-30°C, 130°C].)
+		minSaneC = -100.0
+		maxSaneC = 300.0
+	)
+
+	s := ThermalSensor{
+		SensorKey:   t.SensorKey,
+		Temperature: t.Temperature,
+	}
+
+	// Drop totally nonsensical current temperatures too (rare but possible).
+	if s.Temperature < minSaneC || s.Temperature > maxSaneC {
+		return ThermalSensor{}, false
+	}
+
+	comp, name := classifyThermalKey(t.SensorKey)
+	s.Component = comp
+	s.Name = name
+
+	if t.High >= minSaneC && t.High <= maxSaneC {
+		s.High = t.High
+	}
+	if t.Critical >= minSaneC && t.Critical <= maxSaneC {
+		s.Critical = t.Critical
+	}
+	return s, true
+}
+
+func classifyThermalKey(sensorKey string) (component string, name string) {
+	k := strings.ToLower(strings.TrimSpace(sensorKey))
+	if k == "" {
+		return "", ""
+	}
+
+	// Common Linux hwmon drivers / naming patterns:
+	switch {
+	case strings.HasPrefix(k, "nvme"):
+		// e.g. nvme_composite, nvme_sensor_1
+		return "NVMe", shortThermalName(k, "NVMe")
+	case strings.Contains(k, "k10temp") || strings.Contains(k, "coretemp") || strings.Contains(k, "cpu"):
+		return "CPU", shortThermalName(k, "CPU")
+	case strings.Contains(k, "amdgpu") || strings.Contains(k, "radeon") || strings.Contains(k, "nvidia") || strings.Contains(k, "gpu"):
+		return "GPU", shortThermalName(k, "GPU")
+	case strings.Contains(k, "acpitz") || strings.Contains(k, "thermal_zone"):
+		return "ACPI", shortThermalName(k, "ACPI")
+	case strings.Contains(k, "pch") || strings.Contains(k, "chipset"):
+		return "Chipset", shortThermalName(k, "Chipset")
+	default:
+		return "Other", shortThermalName(k, "")
+	}
+}
+
+func shortThermalName(k string, fallback string) string {
+	// Keep names compact and stable; consumers can still use SensorKey for full detail.
+	k = strings.TrimSpace(k)
+	if k == "" {
+		return fallback
+	}
+	// Drop redundant prefixes like "k10temp_" and "coretemp_"
+	for _, p := range []string{"k10temp_", "coretemp_", "acpitz_", "amdgpu_", "nvme_"} {
+		k = strings.TrimPrefix(k, p)
+	}
+	// Replace underscores with spaces for readability.
+	k = strings.ReplaceAll(k, "_", " ")
+	// Title-case-ish for a nicer UI without locale complexity.
+	if len(k) > 0 {
+		k = strings.ToUpper(k[:1]) + k[1:]
+	}
+	return k
 }
 
 // MemInfo represents memory statistics
