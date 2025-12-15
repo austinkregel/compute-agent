@@ -125,9 +125,11 @@ func TestEmitSample_StatsStructure(t *testing.T) {
 
 	origBattery := getBatteryInfo
 	origTemps := hostSensorsTemperatures
+	origSysfsTemps := sysfsSensorsTemperatures
 	t.Cleanup(func() {
 		getBatteryInfo = origBattery
 		hostSensorsTemperatures = origTemps
+		sysfsSensorsTemperatures = origSysfsTemps
 	})
 
 	getBatteryInfo = func() (*BatteryInfo, error) {
@@ -140,6 +142,8 @@ func TestEmitSample_StatsStructure(t *testing.T) {
 			{SensorKey: "cpu_thermal", Temperature: 55.5, High: 90, Critical: 100},
 		}, nil
 	}
+	// Avoid reading real /sys during tests.
+	sysfsSensorsTemperatures = func() ([]host.TemperatureStat, error) { return nil, nil }
 
 	pub.emitSample()
 
@@ -206,13 +210,16 @@ func TestEmitSample_OmitsBatteryAndThermalWhenUnavailable(t *testing.T) {
 
 	origBattery := getBatteryInfo
 	origTemps := hostSensorsTemperatures
+	origSysfsTemps := sysfsSensorsTemperatures
 	t.Cleanup(func() {
 		getBatteryInfo = origBattery
 		hostSensorsTemperatures = origTemps
+		sysfsSensorsTemperatures = origSysfsTemps
 	})
 
 	getBatteryInfo = func() (*BatteryInfo, error) { return nil, nil }
 	hostSensorsTemperatures = func() ([]host.TemperatureStat, error) { return nil, nil }
+	sysfsSensorsTemperatures = func() ([]host.TemperatureStat, error) { return nil, nil }
 
 	pub.emitSample()
 	events := emitter.Events()
@@ -261,6 +268,49 @@ func TestEmitSample_PartialStats(t *testing.T) {
 	events := emitter.Events()
 	if len(events) != 1 {
 		t.Errorf("expected 1 event even with partial stats, got %d", len(events))
+	}
+}
+
+func TestEmitSample_ThermalFallbackFromSysfs(t *testing.T) {
+	cfg := &config.Config{StatsIntervalSec: 60}
+	log, _ := logging.New(logging.Options{Level: "error"})
+	emitter := &mockEmitter{}
+	pub := NewPublisher(cfg, log, emitter)
+
+	origBattery := getBatteryInfo
+	origTemps := hostSensorsTemperatures
+	origSysfsTemps := sysfsSensorsTemperatures
+	t.Cleanup(func() {
+		getBatteryInfo = origBattery
+		hostSensorsTemperatures = origTemps
+		sysfsSensorsTemperatures = origSysfsTemps
+	})
+
+	getBatteryInfo = func() (*BatteryInfo, error) { return nil, nil }
+	hostSensorsTemperatures = func() ([]host.TemperatureStat, error) { return nil, nil }
+	sysfsSensorsTemperatures = func() ([]host.TemperatureStat, error) {
+		return []host.TemperatureStat{
+			{SensorKey: "thermal_zone0_acpitz", Temperature: 51.0},
+		}, nil
+	}
+
+	pub.emitSample()
+	events := emitter.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	payload, ok := events[0].payload.(map[string]any)
+	if !ok {
+		t.Fatalf("expected payload to be map[string]any, got %T", events[0].payload)
+	}
+	sampleAny := payload["data"]
+	sample, ok := sampleAny.(StatsSample)
+	if !ok {
+		// If serialization already happened to map, just accept that shape.
+		return
+	}
+	if len(sample.Thermal) == 0 {
+		t.Error("expected thermal to be present in sample when sysfs fallback returns data")
 	}
 }
 

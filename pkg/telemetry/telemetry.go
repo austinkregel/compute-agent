@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"net"
+	"runtime"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 var (
 	hostSensorsTemperatures = host.SensorsTemperatures
 	getBatteryInfo          = getBatteryInfoImpl
+	sysfsSensorsTemperatures = readLinuxSysfsTemperatures
 )
 
 // Publisher periodically gathers system metrics and ships them over the transport.
@@ -30,6 +32,9 @@ type Publisher struct {
 	cfg     *config.Config
 	log     *logging.Logger
 	emitter transport.Emitter
+
+	lastBatteryWarn time.Time
+	lastThermalWarn time.Time
 }
 
 // NewPublisher creates a telemetry publisher.
@@ -99,12 +104,28 @@ func (p *Publisher) emitSample() {
 	}
 
 	// Battery - best effort, omitted on hosts without a battery (most servers).
-	if bi, err := getBatteryInfo(); err == nil && bi != nil {
+	if bi, err := getBatteryInfo(); err != nil {
+		p.rateLimitedWarn(&p.lastBatteryWarn, 10*time.Minute, "battery telemetry collection failed", "error", err)
+	} else if bi != nil {
 		sample.Battery = bi
+		p.log.Debug("battery telemetry collected", "devices", len(bi.Devices))
 	}
 
 	// Thermal sensors - best effort; omitted if not available on this host.
-	if temps, err := hostSensorsTemperatures(); err == nil && len(temps) > 0 {
+	temps, tempsErr := hostSensorsTemperatures()
+	if tempsErr != nil {
+		p.rateLimitedWarn(&p.lastThermalWarn, 10*time.Minute, "thermal telemetry collection failed", "source", "gopsutil", "error", tempsErr)
+	}
+	// If gopsutil returns nothing (common on some hosts) attempt a Linux sysfs fallback.
+	if (tempsErr != nil || len(temps) == 0) && runtime.GOOS == "linux" {
+		if fb, fbErr := sysfsSensorsTemperatures(); fbErr != nil {
+			p.rateLimitedWarn(&p.lastThermalWarn, 10*time.Minute, "thermal telemetry collection failed", "source", "sysfs", "error", fbErr)
+		} else if len(fb) > 0 {
+			temps = fb
+			p.log.Debug("thermal telemetry collected via sysfs fallback", "sensors", len(temps))
+		}
+	}
+	if len(temps) > 0 {
 		var thermal []ThermalSensor
 		for _, t := range temps {
 			if norm, ok := normalizeThermal(t); ok {
@@ -113,6 +134,7 @@ func (p *Publisher) emitSample() {
 		}
 		if len(thermal) > 0 {
 			sample.Thermal = thermal
+			p.log.Debug("thermal telemetry collected", "sensors", len(thermal))
 		}
 	}
 
@@ -189,6 +211,19 @@ func (p *Publisher) emitSample() {
 
 	if err := p.emitter.Emit("stats", map[string]any{"data": sample}); err != nil {
 		p.log.Debug("skipping stats emit (transport offline)", "error", err)
+	}
+}
+
+func (p *Publisher) rateLimitedWarn(last *time.Time, every time.Duration, msg string, args ...any) {
+	if p == nil || p.log == nil {
+		return
+	}
+	now := time.Now()
+	if last == nil || last.IsZero() || now.Sub(*last) >= every {
+		if last != nil {
+			*last = now
+		}
+		p.log.Warn(msg, args...)
 	}
 }
 

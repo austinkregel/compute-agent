@@ -3,6 +3,7 @@
 package telemetry
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/yusufpapurcu/wmi"
@@ -19,7 +20,7 @@ func getBatteryInfoImpl() (*BatteryInfo, error) {
 	var dst []win32Battery
 	// Note: Win32_Battery may be absent on desktops/servers; treat as "no battery".
 	if err := wmi.Query("SELECT DeviceID, EstimatedChargeRemaining, BatteryStatus FROM Win32_Battery", &dst); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("wmi Win32_Battery query failed: %w", err)
 	}
 	if len(dst) == 0 {
 		return nil, nil
