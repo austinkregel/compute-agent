@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
 	"net/url"
 	"testing"
 	"time"
@@ -239,6 +240,49 @@ func TestNew_Validation(t *testing.T) {
 	}
 }
 
+func TestEnsureTypeCompat(t *testing.T) {
+	// Non-map payloads are unchanged.
+	if got := ensureTypeCompat("x"); got != "x" {
+		t.Fatalf("expected non-map payload to be unchanged, got %#v", got)
+	}
+
+	// Map without type should not gain t.
+	m1 := map[string]any{"a": 1}
+	out1Any := ensureTypeCompat(m1)
+	out1, ok := out1Any.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T", out1Any)
+	}
+	if _, hasT := out1["t"]; hasT {
+		t.Fatalf("did not expect t to be added when no type present")
+	}
+
+	// Map with t already should preserve it (and not override).
+	m2 := map[string]any{"type": "dir", "t": "legacy"}
+	out2Any := ensureTypeCompat(m2)
+	out2, ok := out2Any.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T", out2Any)
+	}
+	if out2["t"] != "legacy" {
+		t.Fatalf("expected existing t to be preserved, got %v", out2["t"])
+	}
+
+	// Map with type but without t should get a copy with t injected; original not mutated.
+	orig := map[string]any{"type": "file", "name": "x"}
+	gotAny := ensureTypeCompat(orig)
+	got, ok := gotAny.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %#v", gotAny)
+	}
+	if got["t"] != "file" {
+		t.Fatalf("expected injected t to equal type, got %#v", got["t"])
+	}
+	if _, hasT := orig["t"]; hasT {
+		t.Fatalf("did not expect original map to be mutated")
+	}
+}
+
 func TestNew_Defaults(t *testing.T) {
 	cfg := Config{
 		ServerURL:  "https://example.com",
@@ -329,8 +373,13 @@ func TestHTTPTransport_SkipTLSVerify(t *testing.T) {
 		t.Fatal("httpTransport() returned nil")
 	}
 
-	// We can't easily test the TLS config without making actual requests,
-	// but we can verify the transport is created
+	tr, ok := transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", transport)
+	}
+	if tr.TLSClientConfig == nil || !tr.TLSClientConfig.InsecureSkipVerify {
+		t.Fatalf("expected InsecureSkipVerify=true when SkipTLSVerify enabled")
+	}
 }
 
 func TestRegisterEventHandlers(t *testing.T) {

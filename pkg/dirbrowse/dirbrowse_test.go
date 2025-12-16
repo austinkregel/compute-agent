@@ -105,3 +105,60 @@ func TestListLocal_EntryLimitTruncates(t *testing.T) {
 		t.Fatalf("expected Truncated=true")
 	}
 }
+
+func TestValidateRemoteSlashPath(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"", "", true},
+		{"/", "/", false},
+		{"/tmp//x/./y", "/tmp/x/y", false},
+		{"relative/path", "", true},
+		{"/tmp/../etc", "", true},
+		{"/tmp/\x00x", "", true},
+		{`\\server\\share`, "/server/share", false},
+		{`\\tmp\\x\\y`, "/tmp/x/y", false},
+	}
+
+	for _, tt := range tests {
+		got, err := validateRemoteSlashPath(tt.in)
+		if (err != nil) != tt.wantErr {
+			t.Fatalf("validateRemoteSlashPath(%q) err=%v wantErr=%v", tt.in, err, tt.wantErr)
+		}
+		if err != nil {
+			continue
+		}
+		if got != tt.want {
+			t.Fatalf("validateRemoteSlashPath(%q)=%q want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestHostKeyCallback_PolicyHandling(t *testing.T) {
+	if cb, err := hostKeyCallback("insecure_accept_any"); err != nil || cb == nil {
+		t.Fatalf("expected insecure_accept_any to succeed, cb=%v err=%v", cb, err)
+	}
+	if _, err := hostKeyCallback("definitely-not-a-policy"); err == nil {
+		t.Fatalf("expected unsupported policy to error")
+	}
+}
+
+func TestListSMB_EarlyValidationErrors(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := ListSMB(ctx, SMBRequest{Host: "", Share: "sh", Path: "/"}, SMBCredentials{}, SMBOptions{})
+	if err == nil {
+		t.Fatalf("expected error for missing host")
+	}
+	_, err = ListSMB(ctx, SMBRequest{Host: "127.0.0.1", Share: "", Path: "/"}, SMBCredentials{}, SMBOptions{})
+	if err == nil {
+		t.Fatalf("expected error for missing share")
+	}
+	_, err = ListSMB(ctx, SMBRequest{Host: "127.0.0.1", Share: "sh", Path: "relative"}, SMBCredentials{}, SMBOptions{})
+	if err == nil {
+		t.Fatalf("expected error for invalid path")
+	}
+}

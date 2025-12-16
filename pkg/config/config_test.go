@@ -381,3 +381,29 @@ func TestLoad_WithEnvLogFile(t *testing.T) {
 		t.Errorf("expected Logging.FilePath '/custom/log/path.log', got %q", loaded.Logging.FilePath)
 	}
 }
+
+func TestUpdateChecksEnabled(t *testing.T) {
+	// Nil config defaults to enabled.
+	var nilCfg *Config
+	if !nilCfg.UpdateChecksEnabled() {
+		t.Fatalf("expected nil config to default to enabled")
+	}
+
+	// Nil pointer field defaults to enabled.
+	c := &Config{UpdateCheckEnabled: nil}
+	if !c.UpdateChecksEnabled() {
+		t.Fatalf("expected nil UpdateCheckEnabled to default to enabled")
+	}
+
+	f := false
+	c.UpdateCheckEnabled = &f
+	if c.UpdateChecksEnabled() {
+		t.Fatalf("expected UpdateChecksEnabled=false when UpdateCheckEnabled is false")
+	}
+
+	tr := true
+	c.UpdateCheckEnabled = &tr
+	if !c.UpdateChecksEnabled() {
+		t.Fatalf("expected UpdateChecksEnabled=true when UpdateCheckEnabled is true")
+	}
+}

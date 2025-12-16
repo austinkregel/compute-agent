@@ -1,6 +1,10 @@
 package telemetry
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestParseAptGetSimulatedUpgradeCount(t *testing.T) {
 	out := `
@@ -43,5 +47,63 @@ Software Update found the following new or updated software:
 	}
 }
 
+func TestTelemetrySanitizedEnv_AllowsOnlyKnownKeys(t *testing.T) {
+	// Set a mix of allowed and disallowed env vars.
+	oldPath := os.Getenv("PATH")
+	oldSecret := os.Getenv("SUPER_SECRET_TOKEN")
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", oldPath)
+		if oldSecret == "" {
+			_ = os.Unsetenv("SUPER_SECRET_TOKEN")
+		} else {
+			_ = os.Setenv("SUPER_SECRET_TOKEN", oldSecret)
+		}
+	})
 
+	_ = os.Setenv("PATH", "/tmp/testpath")
+	_ = os.Setenv("SUPER_SECRET_TOKEN", "shh")
 
+	env := telemetrySanitizedEnv()
+	joined := strings.Join(env, "\n")
+
+	if !strings.Contains(joined, "PATH=/tmp/testpath") {
+		t.Fatalf("expected PATH to be present in sanitized env, got %q", joined)
+	}
+	if strings.Contains(joined, "SUPER_SECRET_TOKEN=") {
+		t.Fatalf("did not expect secret env var to be present, got %q", joined)
+	}
+}
+
+func TestTruncateOneLine(t *testing.T) {
+	in := "  hello\r\nworld\n  "
+	got := truncateOneLine(in, 100)
+	if got != "hello  world" {
+		t.Fatalf("truncateOneLine cleanup mismatch: got %q", got)
+	}
+
+	long := "abcdefghijklmnopqrstuvwxyz"
+	got2 := truncateOneLine(long, 10)
+	if got2 != "abcdefghij…" {
+		t.Fatalf("truncateOneLine trunc mismatch: got %q", got2)
+	}
+}
+
+func TestParseIntFromFirstMatch(t *testing.T) {
+	tests := []struct {
+		in   string
+		want int
+		ok   bool
+	}{
+		{"", 0, false},
+		{"no digits here", 0, false},
+		{"x=12", 12, true},
+		{"  007 apples", 7, true},
+		{"abc 99 bottles", 99, true},
+	}
+	for _, tt := range tests {
+		got, ok := parseIntFromFirstMatch(tt.in)
+		if ok != tt.ok || got != tt.want {
+			t.Fatalf("parseIntFromFirstMatch(%q) = (%d,%v), want (%d,%v)", tt.in, got, ok, tt.want, tt.ok)
+		}
+	}
+}

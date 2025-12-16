@@ -15,6 +15,31 @@ import (
 	"github.com/austinkregel/compute-agent/pkg/version"
 )
 
+type agentRunner interface {
+	Run(ctx context.Context) error
+}
+
+// newAgent is an indirection to make cmd/agent testable.
+var newAgent = func(cfg *config.Config, log *logging.Logger) (agentRunner, error) {
+	return app.New(cfg, log)
+}
+
+// printVersion prints the version information and exits.
+// Extracted for testability.
+func printVersion() {
+	fmt.Printf("backup-agent %s (%s) built=%s\n", version.Version, version.Commit, version.BuildDate)
+}
+
+// handleVersionFlag processes the version flag and returns true if the program should exit.
+// Extracted for testability to ensure the return statement is covered.
+func handleVersionFlag(showVersion bool) bool {
+	if showVersion {
+		printVersion()
+		return true
+	}
+	return false
+}
+
 func main() {
 	var cfgPath string
 	var showVersion bool
@@ -22,8 +47,7 @@ func main() {
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 	flag.Parse()
 
-	if showVersion {
-		fmt.Printf("backup-agent %s (%s) built=%s\n", version.Version, version.Commit, version.BuildDate)
+	if handleVersionFlag(showVersion) {
 		return
 	}
 
@@ -46,7 +70,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	agent, err := app.New(cfg, log)
+	agent, err := newAgent(cfg, log)
 	if err != nil {
 		log.Error("startup failed", "error", err)
 		os.Exit(1)
@@ -57,4 +81,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-

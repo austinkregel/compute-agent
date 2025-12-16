@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,6 +123,7 @@ func TestLogger_Methods(t *testing.T) {
 	log.Info("info message", "key", "value")
 	log.Error("error message", "key", "value")
 	log.Debug("debug message", "key", "value")
+	log.Warn("warn message", "key", "value")
 }
 
 func TestLogger_With(t *testing.T) {
@@ -225,6 +227,173 @@ func TestLogger_MultiWriter(t *testing.T) {
 	}
 }
 
+func TestRotatingFile_Rotates(t *testing.T) {
+	tmpdir := t.TempDir()
+	logPath := filepath.Join(tmpdir, "rotate.log")
 
+	rot, err := newRotatingFile(logPath, 50)
+	if err != nil {
+		t.Fatalf("newRotatingFile: %v", err)
+	}
+	t.Cleanup(func() { _ = rot.Close() })
 
+	first := bytes.Repeat([]byte("a"), 40)
+	second := bytes.Repeat([]byte("b"), 20) // triggers rotation before write
 
+	if _, err := rot.Write(first); err != nil {
+		t.Fatalf("write first: %v", err)
+	}
+	if _, err := rot.Write(second); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+	_ = rot.Close()
+
+	rotatedPath := logPath + ".1"
+	rotated, err := os.ReadFile(rotatedPath)
+	if err != nil {
+		t.Fatalf("read rotated file: %v", err)
+	}
+	current, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read current file: %v", err)
+	}
+	if !bytes.Equal(rotated, first) {
+		t.Fatalf("rotated content mismatch: got %q want %q", string(rotated), string(first))
+	}
+	if !bytes.Equal(current, second) {
+		t.Fatalf("current content mismatch: got %q want %q", string(current), string(second))
+	}
+}
+
+func TestRotatingFile_ExistingFileTriggersRotationOnNextWrite(t *testing.T) {
+	tmpdir := t.TempDir()
+	logPath := filepath.Join(tmpdir, "rotate.log")
+
+	// Pre-create a file larger than the max so the first write forces rotation.
+	orig := bytes.Repeat([]byte("x"), 100)
+	if err := os.WriteFile(logPath, orig, 0o600); err != nil {
+		t.Fatalf("seed log file: %v", err)
+	}
+
+	rot, err := newRotatingFile(logPath, 50)
+	if err != nil {
+		t.Fatalf("newRotatingFile: %v", err)
+	}
+	t.Cleanup(func() { _ = rot.Close() })
+
+	payload := []byte("hello")
+	if _, err := rot.Write(payload); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = rot.Close()
+
+	rotated, err := os.ReadFile(logPath + ".1")
+	if err != nil {
+		t.Fatalf("read rotated file: %v", err)
+	}
+	current, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read current file: %v", err)
+	}
+	if !bytes.Equal(rotated, orig) {
+		t.Fatalf("rotated content mismatch: got %d bytes want %d bytes", len(rotated), len(orig))
+	}
+	if string(current) != string(payload) {
+		t.Fatalf("current content mismatch: got %q want %q", string(current), string(payload))
+	}
+}
+
+func TestNewRotatingFile_DefaultMaxSizeWhenNonPositive(t *testing.T) {
+	tmpdir := t.TempDir()
+	logPath := filepath.Join(tmpdir, "rotate.log")
+
+	rot, err := newRotatingFile(logPath, 0)
+	if err != nil {
+		t.Fatalf("newRotatingFile: %v", err)
+	}
+	t.Cleanup(func() { _ = rot.Close() })
+
+	if rot.maxSize != defaultRotateMaxBytes {
+		t.Fatalf("expected default maxSize %d, got %d", defaultRotateMaxBytes, rot.maxSize)
+	}
+}
+
+func TestNewRotatingFile_MkdirAllErrorWhenParentIsFile(t *testing.T) {
+	tmpdir := t.TempDir()
+	parentAsFile := filepath.Join(tmpdir, "not-a-dir")
+	if err := os.WriteFile(parentAsFile, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed parent file: %v", err)
+	}
+	// filepath.Dir(child) == parentAsFile, but it's a file, so MkdirAll should fail.
+	child := filepath.Join(parentAsFile, "rotate.log")
+	if _, err := newRotatingFile(child, 10); err == nil {
+		t.Fatalf("expected error when parent is a file")
+	}
+}
+
+func TestRotatingFile_ReopensOnWriteAfterClose(t *testing.T) {
+	tmpdir := t.TempDir()
+	logPath := filepath.Join(tmpdir, "rotate.log")
+
+	rot, err := newRotatingFile(logPath, 100)
+	if err != nil {
+		t.Fatalf("newRotatingFile: %v", err)
+	}
+
+	if _, err := rot.Write([]byte("first")); err != nil {
+		t.Fatalf("write first: %v", err)
+	}
+	if err := rot.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	// Second write should reopen the file (covers r.file == nil branch).
+	if _, err := rot.Write([]byte("second")); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+	_ = rot.Close()
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(data) != "firstsecond" {
+		t.Fatalf("unexpected content: %q", string(data))
+	}
+}
+
+func TestRotatingFile_RotateLockedOpenOrCreateFailurePropagates(t *testing.T) {
+	tmpdir := t.TempDir()
+	logPath := filepath.Join(tmpdir, "rotate.log")
+
+	rot, err := newRotatingFile(logPath, 10)
+	if err != nil {
+		t.Fatalf("newRotatingFile: %v", err)
+	}
+	t.Cleanup(func() { _ = rot.Close() })
+
+	if _, err := rot.Write([]byte("123456789")); err != nil {
+		t.Fatalf("write initial: %v", err)
+	}
+
+	// Force rotation, but sabotage openOrCreate by setting path to a directory.
+	// Also force the rename step to fail deterministically by ensuring "<dir>.1"
+	// exists and is a non-empty directory (os.Remove will fail; rename will fail).
+	dirPath := filepath.Join(tmpdir, "dir-as-path")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatalf("mkdir dirPath: %v", err)
+	}
+	rotatedDir := dirPath + ".1"
+	if err := os.MkdirAll(rotatedDir, 0o755); err != nil {
+		t.Fatalf("mkdir rotatedDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rotatedDir, "keep"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed rotatedDir: %v", err)
+	}
+
+	rot.path = dirPath
+
+	// Need enough bytes to cross the threshold (size 9 + 2 == 11 > 10).
+	if _, err := rot.Write([]byte("XX")); err == nil {
+		t.Fatalf("expected rotation/openOrCreate error")
+	}
+}

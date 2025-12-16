@@ -565,6 +565,45 @@ func TestBackup_FilePermissions_Secure(t *testing.T) {
 	}
 }
 
+func TestNormalizeGlobsAndMatchesAny(t *testing.T) {
+	globs := normalizeGlobs([]string{"", "  ", "**/*.log", " tmp/** "})
+	if len(globs) != 2 {
+		t.Fatalf("expected 2 normalized globs, got %d: %v", len(globs), globs)
+	}
+
+	if !matchesAny("a/b/c.log", []string{"**/*.log"}) {
+		t.Fatalf("expected path to match glob")
+	}
+	if matchesAny("a/b/c.txt", []string{"**/*.log"}) {
+		t.Fatalf("expected path to not match glob")
+	}
+}
+
+func TestParseInt64WithCommas(t *testing.T) {
+	got, err := parseInt64WithCommas("  1,234,567 ")
+	if err != nil {
+		t.Fatalf("parseInt64WithCommas error: %v", err)
+	}
+	if got != 1234567 {
+		t.Fatalf("parseInt64WithCommas got %d want %d", got, 1234567)
+	}
+}
+
+func TestMaxHelpers(t *testing.T) {
+	if got := max(1, 2); got != 2 {
+		t.Fatalf("max(1,2)=%d want 2", got)
+	}
+	if got := max(5, 2); got != 5 {
+		t.Fatalf("max(5,2)=%d want 5", got)
+	}
+	if got := max64(1, 2); got != 2 {
+		t.Fatalf("max64(1,2)=%d want 2", got)
+	}
+	if got := max64(5, 2); got != 5 {
+		t.Fatalf("max64(5,2)=%d want 5", got)
+	}
+}
+
 type testEmitter struct {
 	emitFunc func(string, any) error
 }
