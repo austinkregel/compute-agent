@@ -29,6 +29,7 @@ var (
 	getBatteryInfo                = getBatteryInfoImpl
 	sysfsSensorsTemperatures      = readLinuxSysfsTemperatures
 	windowsOHMSensorsTemperatures = readWindowsOHMTemperatures
+	linuxGPUTemperatures          = readLinuxGPUTemps
 )
 
 // Publisher periodically gathers system metrics and ships them over the transport.
@@ -229,6 +230,16 @@ func (p *Publisher) emitSample() {
 				temps = fb
 				p.log.Debug("thermal telemetry collected via sysfs fallback", "sensors", len(temps))
 			}
+		}
+	}
+
+	// Linux GPU temps (best-effort via vendor CLIs) augment other sensors.
+	if runtime.GOOS == "linux" {
+		if gpuTemps, gpuErr := linuxGPUTemperatures(); gpuErr != nil {
+			p.log.Debug("gpu thermal telemetry collection failed", "source", "gpu_cli", "error", gpuErr)
+		} else if len(gpuTemps) > 0 {
+			temps = append(temps, gpuTemps...)
+			p.log.Debug("thermal telemetry collected via gpu cli", "sensors", len(gpuTemps))
 		}
 	}
 	if len(temps) > 0 {

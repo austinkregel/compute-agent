@@ -227,15 +227,18 @@ func TestEmitSample_OmitsBatteryAndThermalWhenUnavailable(t *testing.T) {
 	origBattery := getBatteryInfo
 	origTemps := hostSensorsTemperatures
 	origSysfsTemps := sysfsSensorsTemperatures
+	origGpuTemps := linuxGPUTemperatures
 	t.Cleanup(func() {
 		getBatteryInfo = origBattery
 		hostSensorsTemperatures = origTemps
 		sysfsSensorsTemperatures = origSysfsTemps
+		linuxGPUTemperatures = origGpuTemps
 	})
 
 	getBatteryInfo = func() (*BatteryInfo, error) { return nil, nil }
 	hostSensorsTemperatures = func() ([]host.TemperatureStat, error) { return nil, nil }
 	sysfsSensorsTemperatures = func() ([]host.TemperatureStat, error) { return nil, nil }
+	linuxGPUTemperatures = func() ([]host.TemperatureStat, error) { return nil, nil }
 
 	pub.emitSample()
 	events := emitter.Events()
