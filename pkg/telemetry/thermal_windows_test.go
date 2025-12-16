@@ -22,7 +22,8 @@ func TestReadWindowsOHMTemperatures_Success(t *testing.T) {
 					"Text": "CPU",
 					"Children": [
 						{"Text": "Core #1", "SensorType": "Temperature", "Value": 45.5, "Max": "100\u00b0C"},
-						{"Text": "Core #2", "SensorType": "Temperature", "Value": "47.2 \u00b0C", "Max": "105"}
+						{"Text": "Core #2", "SensorType": "Temperature", "Value": "47.2 \u00b0C", "Max": "105"},
+						{"Text": "Core #3", "Value": "50.0 \u00b0C", "Max": "99"} // missing SensorType but under CPU/Temperatures
 					]
 				}]
 			}]
@@ -43,8 +44,8 @@ func TestReadWindowsOHMTemperatures_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(temps) != 2 {
-		t.Fatalf("expected 2 temps, got %d", len(temps))
+	if len(temps) != 3 {
+		t.Fatalf("expected 3 temps, got %d", len(temps))
 	}
 	if temps[0].SensorKey == "" || temps[1].SensorKey == "" {
 		t.Fatalf("expected sensor keys to be populated")
@@ -60,6 +61,12 @@ func TestReadWindowsOHMTemperatures_Success(t *testing.T) {
 	}
 	if temps[1].High != 105 {
 		t.Errorf("expected second max 105, got %v", temps[1].High)
+	}
+	if temps[2].Temperature != 50 {
+		t.Errorf("expected third temp 50, got %v", temps[2].Temperature)
+	}
+	if temps[2].High != 99 {
+		t.Errorf("expected third max 99, got %v", temps[2].High)
 	}
 }
 

@@ -66,7 +66,22 @@ func walkOHMTree(node ohmNode, parents []string, out *[]host.TemperatureStat) {
 		path = append(path, label)
 	}
 
-	if strings.EqualFold(node.SensorType, "Temperature") {
+	sensorType := strings.TrimSpace(node.SensorType)
+	if sensorType == "" && len(node.Children) == 0 {
+		// Some OHM payloads omit SensorType but place temperatures under a
+		// "Temperatures" parent or use labels containing "Temperature".
+		for _, p := range path {
+			if strings.EqualFold(strings.TrimSpace(p), "Temperatures") {
+				sensorType = "Temperature"
+				break
+			}
+		}
+		if sensorType == "" && strings.Contains(strings.ToLower(label), "temperature") {
+			sensorType = "Temperature"
+		}
+	}
+
+	if strings.EqualFold(sensorType, "Temperature") {
 		if val, ok := parseOHMFloat(node.Value); ok {
 			ts := host.TemperatureStat{
 				SensorKey:   strings.Join(path, "/"),
