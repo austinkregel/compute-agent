@@ -48,19 +48,20 @@ type Config struct {
 
 // Handlers capture callbacks for server-originated events.
 type Handlers struct {
-	Hello       func()
-	AdminRun    func(AdminCommand)
-	ShellStart  func(ShellStart)
-	ShellInput  func(ShellInput)
-	ShellResize func(ShellResize)
-	ShellClose  func(ShellClose)
+	Hello        func()
+	AdminRun     func(AdminCommand)
+	ShellStart   func(ShellStart)
+	ShellInput   func(ShellInput)
+	ShellResize  func(ShellResize)
+	ShellClose   func(ShellClose)
 	LogTailStart func(LogTailStart)
 	LogTailStop  func(LogTailStop)
-	BackupPlan  func(BackupRequest)
-	BackupStart func(BackupRequest)
-	SyncKeys    func(SyncKeysRequest)
-	UpdateAgent func(UpdateAgentRequest)
+	BackupPlan   func(BackupRequest)
+	BackupStart  func(BackupRequest)
+	SyncKeys     func(SyncKeysRequest)
+	UpdateAgent  func(UpdateAgentRequest)
 	CheckUpdates func(CheckUpdatesRequest)
+	DirList      func(DirListRequest)
 }
 
 // AdminCommand mirrors the payload emitted by the control plane.
@@ -119,6 +120,45 @@ type BackupRequest struct {
 	SourceDirs  []string `json:"sourceDirs"`
 	DestRoot    string   `json:"destRoot"`
 	IgnoreGlobs []string `json:"ignoreGlobs"`
+}
+
+// DirListRequest asks the agent to list a single directory (local or remote).
+// See working_plan.md (RFC-0002).
+type DirListRequest struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	Mode      string `json:"mode"` // "local" or "remote"
+	Path      string `json:"path"`
+
+	// Remote fields (SSH / SMB). Host is required for remote mode.
+	Host string `json:"host,omitempty"`
+	User string `json:"user,omitempty"`
+	Port int    `json:"port,omitempty"`
+
+	// Optional extension: remote protocol selector.
+	// If empty, agent treats remote mode as SSH.
+	Protocol string `json:"protocol,omitempty"` // "ssh" or "smb"
+
+	// SMB-only fields.
+	Share   string `json:"share,omitempty"`
+	Profile string `json:"profile,omitempty"`
+}
+
+// DirListEntry describes a single child entry of a directory.
+type DirListEntry struct {
+	Name string `json:"name"`
+	Type string `json:"type"`           // "dir" or "file"
+	Size int64  `json:"size,omitempty"` // optional
+}
+
+// DirListResponse returns entries for a single directory request.
+type DirListResponse struct {
+	ClientID  string         `json:"clientId"`
+	RequestID string         `json:"requestId"`
+	Mode      string         `json:"mode"`
+	Path      string         `json:"path"`
+	Entries   []DirListEntry `json:"entries"`
+	Error     string         `json:"error,omitempty"`
 }
 
 // SyncKeysRequest contains GitHub username for authorized_keys sync.
@@ -424,6 +464,14 @@ func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
 		c.log.Info("recv event", "event", "check_updates")
 		if c.handlers.CheckUpdates != nil {
 			c.handlers.CheckUpdates(msg)
+		}
+	})
+
+	socket.OnEvent("dir_list_request", func(msg DirListRequest) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "dir_list_request")
+		if c.handlers.DirList != nil {
+			c.handlers.DirList(msg)
 		}
 	})
 }

@@ -47,6 +47,17 @@ The agent reads JSON configuration (default `agent-config.json`, override with `
   "shell": {
     "command": "/bin/bash",
     "args": ["-l"]
+  },
+  "dirBrowse": {
+    "allowedRoots": [],
+    "sshHostKeyPolicy": "known_hosts",
+    "smbProfiles": {
+      "nas": {
+        "username": "WORKGROUP\\\\backup",
+        "password": "REDACTED",
+        "domain": "WORKGROUP"
+      }
+    }
   }
 }
 ```

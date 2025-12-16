@@ -11,13 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/austinkregel/compute-agent/pkg/admin"
 	"github.com/austinkregel/compute-agent/pkg/backup"
 	"github.com/austinkregel/compute-agent/pkg/config"
+	"github.com/austinkregel/compute-agent/pkg/dirbrowse"
 	"github.com/austinkregel/compute-agent/pkg/logging"
 	"github.com/austinkregel/compute-agent/pkg/telemetry"
 	"github.com/austinkregel/compute-agent/pkg/transport"
@@ -82,8 +83,8 @@ type Agent struct {
 // New assembles the agent subsystems from config.
 func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 	agent := &Agent{
-		cfg: cfg,
-		log: log,
+		cfg:     cfg,
+		log:     log,
 		logTail: map[string]*tailHandle{},
 	}
 
@@ -93,19 +94,20 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 	})
 
 	handlers := transport.Handlers{
-		Hello:       agent.handleHello,
-		AdminRun:    agent.handleAdminRun,
-		ShellStart:  agent.handleShellStart,
-		ShellInput:  agent.handleShellInput,
-		ShellResize: agent.handleShellResize,
-		ShellClose:  agent.handleShellClose,
+		Hello:        agent.handleHello,
+		AdminRun:     agent.handleAdminRun,
+		ShellStart:   agent.handleShellStart,
+		ShellInput:   agent.handleShellInput,
+		ShellResize:  agent.handleShellResize,
+		ShellClose:   agent.handleShellClose,
 		LogTailStart: agent.handleLogTailStart,
 		LogTailStop:  agent.handleLogTailStop,
-		BackupPlan:  agent.handleBackupPlan,
-		BackupStart: agent.handleBackupStart,
-		SyncKeys:    agent.handleSyncKeys,
-		UpdateAgent: agent.handleAgentUpdate,
+		BackupPlan:   agent.handleBackupPlan,
+		BackupStart:  agent.handleBackupStart,
+		SyncKeys:     agent.handleSyncKeys,
+		UpdateAgent:  agent.handleAgentUpdate,
 		CheckUpdates: agent.handleCheckUpdates,
+		DirList:      agent.handleDirListRequest,
 	}
 
 	t, err := transport.New(transport.Config{
@@ -363,6 +365,140 @@ func (a *Agent) handleCheckUpdates(_ transport.CheckUpdatesRequest) {
 		a.log.Info("manual update check requested")
 		a.telemetry.CheckUpdatesNow()
 	}()
+}
+
+func (a *Agent) handleDirListRequest(msg transport.DirListRequest) {
+	ctx, cancel := context.WithTimeout(a.ctxOrBackground(), 15*time.Second)
+	defer cancel()
+
+	resp := a.buildDirListResponse(ctx, msg)
+	if err := a.transport.Emit("dir_list_response", resp); err != nil {
+		a.log.Error("failed to emit dir_list_response", "requestId", msg.RequestID, "error", err)
+	}
+}
+
+func (a *Agent) buildDirListResponse(ctx context.Context, msg transport.DirListRequest) transport.DirListResponse {
+	mode := strings.TrimSpace(msg.Mode)
+	if mode == "" {
+		mode = "local"
+	}
+	// Always respond with our configured client id; tolerate older payloads that omit it.
+	clientID := a.cfg.ClientID
+
+	resp := transport.DirListResponse{
+		ClientID:  clientID,
+		RequestID: msg.RequestID,
+		Mode:      mode,
+		Path:      strings.TrimSpace(msg.Path),
+		Entries:   []transport.DirListEntry{},
+	}
+
+	switch mode {
+	case "local":
+		clean, err := dirbrowse.ValidateAbsoluteDirPath(msg.Path)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		if err := dirbrowse.EnforceAllowedRoots(clean, a.cfg.DirBrowse.AllowedRoots); err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		res, err := dirbrowse.ListLocal(ctx, clean, 0, 0)
+		resp.Path = clean
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Path = res.Path
+		resp.Entries = toTransportDirEntries(res.Entries)
+		return resp
+
+	case "remote":
+		if strings.TrimSpace(msg.Host) == "" {
+			resp.Error = "host is required for remote listing"
+			return resp
+		}
+		proto := strings.TrimSpace(msg.Protocol)
+		if proto == "" {
+			proto = "ssh"
+		}
+
+		switch proto {
+		case "ssh":
+			res, err := dirbrowse.ListSSH(ctx, dirbrowse.SSHRequest{
+				Host: msg.Host,
+				User: msg.User,
+				Port: msg.Port,
+				Path: msg.Path,
+			}, dirbrowse.SSHOptions{
+				HostKeyPolicy: a.cfg.DirBrowse.SSHHostKeyPolicy,
+			})
+			if err != nil {
+				resp.Error = err.Error()
+				return resp
+			}
+			resp.Path = res.Path
+			resp.Entries = toTransportDirEntries(res.Entries)
+			return resp
+
+		case "smb":
+			share := strings.TrimSpace(msg.Share)
+			if share == "" {
+				resp.Error = "share is required for smb listing"
+				return resp
+			}
+			profile := strings.TrimSpace(msg.Profile)
+			if profile == "" {
+				resp.Error = "profile is required for smb listing"
+				return resp
+			}
+			p, ok := a.cfg.DirBrowse.SMBProfiles[profile]
+			if !ok {
+				resp.Error = "unknown smb profile"
+				return resp
+			}
+
+			res, err := dirbrowse.ListSMB(ctx, dirbrowse.SMBRequest{
+				Host:    msg.Host,
+				Port:    msg.Port,
+				Share:   share,
+				Path:    msg.Path,
+				Profile: profile,
+			}, dirbrowse.SMBCredentials{
+				Username: p.Username,
+				Password: p.Password,
+				Domain:   p.Domain,
+			}, dirbrowse.SMBOptions{})
+			if err != nil {
+				resp.Error = err.Error()
+				return resp
+			}
+			resp.Path = res.Path
+			resp.Entries = toTransportDirEntries(res.Entries)
+			return resp
+
+		default:
+			resp.Error = fmt.Sprintf("unsupported remote protocol %q", proto)
+			return resp
+		}
+
+	default:
+		resp.Error = fmt.Sprintf("invalid mode %q", mode)
+		return resp
+	}
+}
+
+func toTransportDirEntries(in []dirbrowse.Entry) []transport.DirListEntry {
+	out := make([]transport.DirListEntry, 0, len(in))
+	for _, e := range in {
+		out = append(out, transport.DirListEntry{
+			Name: e.Name,
+			Type: e.Type,
+			Size: e.Size,
+		})
+	}
+	return out
 }
 
 func (a *Agent) emitShellOutput(session string, data []byte) {

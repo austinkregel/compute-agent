@@ -13,13 +13,13 @@ import (
 
 // Config captures all runtime knobs for the Go agent.
 type Config struct {
-	ClientID             string `json:"clientId"`
-	ServerURL            string `json:"serverUrl"`
-	AuthToken            string `json:"authToken"`
-	StatsIntervalSec     int    `json:"statsIntervalSec"`
-	HeartbeatIntervalSec int    `json:"heartbeatIntervalSec"`
-	UpdateCheckEnabled       *bool `json:"updateCheckEnabled"`
-	UpdateCheckIntervalHours int   `json:"updateCheckIntervalHours"`
+	ClientID                 string `json:"clientId"`
+	ServerURL                string `json:"serverUrl"`
+	AuthToken                string `json:"authToken"`
+	StatsIntervalSec         int    `json:"statsIntervalSec"`
+	HeartbeatIntervalSec     int    `json:"heartbeatIntervalSec"`
+	UpdateCheckEnabled       *bool  `json:"updateCheckEnabled"`
+	UpdateCheckIntervalHours int    `json:"updateCheckIntervalHours"`
 	// PongTimeoutSec controls when the agent should send proactive pings if idle.
 	// See requirements.md: pongTimeoutSec is 90s by default.
 	PongTimeoutSec int                `json:"pongTimeoutSec"`
@@ -29,6 +29,29 @@ type Config struct {
 	Transport      TransportConfig    `json:"transport"`
 	Logging        LoggingConfig      `json:"logging"`
 	Shell          ShellConfig        `json:"shell"`
+	DirBrowse      DirBrowseConfig    `json:"dirBrowse"`
+}
+
+// DirBrowseConfig controls directory browsing behavior (RFC-0002).
+type DirBrowseConfig struct {
+	// AllowedRoots restricts which local paths may be listed.
+	// If empty, directory browsing is unrestricted (subject to validation).
+	AllowedRoots []string `json:"allowedRoots"`
+
+	// SSHHostKeyPolicy controls how SSH host keys are verified for remote browsing.
+	// Supported values:
+	// - "known_hosts" (default): verify against ~/.ssh/known_hosts
+	// - "insecure_accept_any": accept any host key (unsafe; explicit opt-in)
+	SSHHostKeyPolicy string `json:"sshHostKeyPolicy"`
+
+	// SMBProfiles stores credentials for SMB browsing. Requests reference a profile by name.
+	SMBProfiles map[string]SMBProfile `json:"smbProfiles"`
+}
+
+type SMBProfile struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Domain   string `json:"domain"`
 }
 
 // ConnectivityConfig governs liveness probes (DNS + TCP).
@@ -176,6 +199,13 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
+	}
+
+	if strings.TrimSpace(c.DirBrowse.SSHHostKeyPolicy) == "" {
+		c.DirBrowse.SSHHostKeyPolicy = "known_hosts"
+	}
+	if c.DirBrowse.SMBProfiles == nil {
+		c.DirBrowse.SMBProfiles = map[string]SMBProfile{}
 	}
 }
 
