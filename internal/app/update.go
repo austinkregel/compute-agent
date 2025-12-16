@@ -108,17 +108,17 @@ func (a *Agent) trySelfUpdate(ctx context.Context, repo string, desiredTag strin
 	if err := cmd.Start(); err != nil {
 		return updateResult{OK: false, Tag: tag, Error: "restart", Detail: err.Error()}
 	}
-	
+
 	newPID := cmd.Process.Pid
 	a.log.Info("started new process", "pid", newPID)
-	
+
 	// Verify the new process started successfully before exiting.
 	// Use a goroutine to wait for the process; if it exits quickly, that's a failure.
 	processExited := make(chan error, 1)
 	go func() {
 		processExited <- cmd.Wait()
 	}()
-	
+
 	// Wait a short time to see if process exits immediately (indicates failure)
 	select {
 	case err := <-processExited:
@@ -132,7 +132,7 @@ func (a *Agent) trySelfUpdate(ctx context.Context, repo string, desiredTag strin
 		// Process is still running after 1 second - good!
 		a.log.Info("new process verified running", "pid", newPID)
 	}
-	
+
 	// Small delay to reduce reconnect thrash if the supervisor restarts too.
 	// Note: If managed by supervisor, supervisor will restart when this process exits.
 	// The new binary is already in place, so supervisor will start the new version.
@@ -420,12 +420,28 @@ func copyFileAtomic(src, dest string, mode os.FileMode) error {
 }
 
 func swapExecutable(exePath, stagedPath string) error {
-	// Remove old binary immediately - we don't preserve old versions.
-	// On Unix, we can remove the running binary (it's still in memory).
-	// On Windows, removal may fail if locked, but we try anyway.
-	_ = os.Remove(exePath)
+	if runtime.GOOS == "windows" {
+		// Windows cannot overwrite a running executable. Use a rename pattern:
+		// move current exe to .old (handle remains valid for running process),
+		// then move staged into place.
+		oldPath := exePath + ".old"
+		// Best-effort cleanup of previous .old file.
+		_ = os.Remove(oldPath)
+		// Best-effort rename of current executable to .old (may fail if already moved).
+		_ = os.Rename(exePath, oldPath)
+		// Put the new one in place.
+		if err := os.Rename(stagedPath, exePath); err != nil {
+			// Fall back to copy-over if rename still fails.
+			if err2 := copyFileAtomic(stagedPath, exePath, 0o755); err2 != nil {
+				return err
+			}
+			_ = os.Remove(stagedPath)
+		}
+		return nil
+	}
 
-	// Put the new one in place.
+	// Unix: we can remove the running binary and rename over it.
+	_ = os.Remove(exePath)
 	if err := os.Rename(stagedPath, exePath); err != nil {
 		// If rename failed, try copy-over then cleanup.
 		if err2 := copyFileAtomic(stagedPath, exePath, 0o755); err2 != nil {
@@ -433,13 +449,17 @@ func swapExecutable(exePath, stagedPath string) error {
 		}
 		_ = os.Remove(stagedPath)
 	}
-
-	// Ensure executable bit on unix.
-	if runtime.GOOS != "windows" {
-		_ = os.Chmod(exePath, 0o755)
-	}
+	_ = os.Chmod(exePath, 0o755)
 	return nil
 }
 
-
-
+func cleanupOldExecutables(exePath string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	dir := filepath.Dir(exePath)
+	base := filepath.Base(exePath)
+	oldPath := filepath.Join(dir, base+".old")
+	// Best-effort cleanup; ignore errors.
+	_ = os.Remove(oldPath)
+}

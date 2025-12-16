@@ -88,6 +88,17 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		logTail: map[string]*tailHandle{},
 	}
 
+	// Best-effort cleanup of old Windows executables left after an update.
+	if exePath, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
+			cleanupOldExecutables(resolved)
+		} else {
+			cleanupOldExecutables(exePath)
+		}
+	} else {
+		log.Debug("unable to resolve executable for cleanup", "error", err)
+	}
+
 	adminRunner := admin.NewRunner(cfg, log.With("component", "admin"), admin.ShellCallbacks{
 		OnOutput: agent.emitShellOutput,
 		OnClosed: agent.emitShellClosed,
