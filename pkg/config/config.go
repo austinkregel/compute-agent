@@ -20,6 +20,7 @@ type Config struct {
 	HeartbeatIntervalSec     int    `json:"heartbeatIntervalSec"`
 	UpdateCheckEnabled       *bool  `json:"updateCheckEnabled"`
 	UpdateCheckIntervalHours int    `json:"updateCheckIntervalHours"`
+	OpenHardwareMonitorPort  int    `json:"openHardwareMonitorPort"`
 	// PongTimeoutSec controls when the agent should send proactive pings if idle.
 	// See requirements.md: pongTimeoutSec is 90s by default.
 	PongTimeoutSec int                `json:"pongTimeoutSec"`
@@ -161,6 +162,9 @@ func (c *Config) applyDefaults() {
 		v := true
 		c.UpdateCheckEnabled = &v
 	}
+	if c.OpenHardwareMonitorPort <= 0 {
+		c.OpenHardwareMonitorPort = 8085
+	}
 	if c.PongTimeoutSec <= 0 {
 		c.PongTimeoutSec = 90
 	}
@@ -242,6 +246,11 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("PONG_TIMEOUT_SEC"); v != "" {
 		if parsed, err := parseInt(v); err == nil {
 			c.PongTimeoutSec = parsed
+		}
+	}
+	if v := os.Getenv("OHM_PORT"); v != "" {
+		if parsed, err := parseInt(v); err == nil {
+			c.OpenHardwareMonitorPort = parsed
 		}
 	}
 	if v := os.Getenv("ADMIN_ALLOWED_COMMANDS"); v != "" {

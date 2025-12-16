@@ -25,9 +25,10 @@ import (
 
 // Function indirections to make telemetry collection testable without depending on host hardware.
 var (
-	hostSensorsTemperatures = host.SensorsTemperatures
-	getBatteryInfo          = getBatteryInfoImpl
-	sysfsSensorsTemperatures = readLinuxSysfsTemperatures
+	hostSensorsTemperatures       = host.SensorsTemperatures
+	getBatteryInfo                = getBatteryInfoImpl
+	sysfsSensorsTemperatures      = readLinuxSysfsTemperatures
+	windowsOHMSensorsTemperatures = readWindowsOHMTemperatures
 )
 
 // Publisher periodically gathers system metrics and ships them over the transport.
@@ -154,7 +155,7 @@ func (p *Publisher) emitSample() {
 			sample.LastReboot = boot.Format(time.RFC3339)
 		}
 	}
-	
+
 	// CPU count - use runtime.NumCPU() which returns the number of logical CPUs (cores/threads)
 	// This is more accurate than hi.Procs which represents the number of processes
 	sample.CPUs = runtime.NumCPU()
@@ -199,19 +200,32 @@ func (p *Publisher) emitSample() {
 	}
 
 	// Thermal sensors - best effort; omitted if not available on this host.
-	temps, tempsErr := hostSensorsTemperatures()
-	// If gopsutil returns nothing (common on some hosts) attempt a Linux sysfs fallback.
-	if (tempsErr != nil || len(temps) == 0) && runtime.GOOS == "linux" {
-		if fb, fbErr := sysfsSensorsTemperatures(); fbErr != nil {
-			// Only warn here if we truly have no temps at all (gopsutil returned none and sysfs failed).
-			if len(temps) == 0 {
-				p.rateLimitedWarn(&p.lastThermalWarn, 10*time.Minute, "thermal telemetry collection failed", "source", "sysfs", "error", fbErr)
-			} else {
-				p.log.Debug("thermal telemetry sysfs fallback failed (gopsutil still returned temps)", "error", fbErr, "gopsutilSensors", len(temps))
+	var temps []host.TemperatureStat
+	var tempsErr error
+	if runtime.GOOS == "windows" {
+		if ohmTemps, ohmErr := windowsOHMSensorsTemperatures(p.cfg.OpenHardwareMonitorPort); ohmErr != nil {
+			p.rateLimitedWarn(&p.lastThermalWarn, 10*time.Minute, "thermal telemetry collection failed", "source", "openhardwaremonitor", "error", ohmErr)
+		} else if len(ohmTemps) > 0 {
+			temps = ohmTemps
+		}
+		if len(temps) == 0 {
+			temps, tempsErr = hostSensorsTemperatures()
+		}
+	} else {
+		temps, tempsErr = hostSensorsTemperatures()
+		// If gopsutil returns nothing (common on some hosts) attempt a Linux sysfs fallback.
+		if (tempsErr != nil || len(temps) == 0) && runtime.GOOS == "linux" {
+			if fb, fbErr := sysfsSensorsTemperatures(); fbErr != nil {
+				// Only warn here if we truly have no temps at all (gopsutil returned none and sysfs failed).
+				if len(temps) == 0 {
+					p.rateLimitedWarn(&p.lastThermalWarn, 10*time.Minute, "thermal telemetry collection failed", "source", "sysfs", "error", fbErr)
+				} else {
+					p.log.Debug("thermal telemetry sysfs fallback failed (gopsutil still returned temps)", "error", fbErr, "gopsutilSensors", len(temps))
+				}
+			} else if len(fb) > 0 {
+				temps = fb
+				p.log.Debug("thermal telemetry collected via sysfs fallback", "sensors", len(temps))
 			}
-		} else if len(fb) > 0 {
-			temps = fb
-			p.log.Debug("thermal telemetry collected via sysfs fallback", "sensors", len(temps))
 		}
 	}
 	if len(temps) > 0 {
@@ -413,27 +427,27 @@ func (p *Publisher) rateLimitedWarn(last *time.Time, every time.Duration, msg st
 
 // StatsSample defines the schema sent to the control plane.
 type StatsSample struct {
-	AgentVersion string          `json:"agentVersion,omitempty"`
-	CPUPercent   float64         `json:"cpu"`
-	Mem          *MemInfo        `json:"mem,omitempty"` // UI expects mem object, not memPercent
-	Load         LoadAvg         `json:"load"`
-	Disk         []DiskInfo      `json:"disk,omitempty"`
-	NetIfaces    []NetInterface  `json:"netIfaces,omitempty"`
-	Hostname     string          `json:"hostname,omitempty"`
-	Platform     string          `json:"platform,omitempty"`
-	Release      string          `json:"release,omitempty"`
-	Arch         string          `json:"arch,omitempty"`
-	CPUs         int             `json:"cpus,omitempty"`
-	UptimeSec    uint64          `json:"uptimeSec,omitempty"`
-	Battery      *BatteryInfo    `json:"battery,omitempty"`
-	Thermal      []ThermalSensor `json:"thermal,omitempty"`
-	Updates            *UpdateInfo    `json:"updates,omitempty"`
-	LastReboot         string         `json:"lastReboot,omitempty"`         // RFC3339 timestamp (UTC)
-	KernelVersion      string         `json:"kernelVersion,omitempty"`
-	SecurityPatchStatus string        `json:"securityPatchStatus,omitempty"`
-	ServiceHealth      *ServiceHealth `json:"serviceHealth,omitempty"`
-	TimeSyncStatus     string         `json:"timeSyncStatus,omitempty"`
-	Timestamp    string          `json:"ts"`
+	AgentVersion        string          `json:"agentVersion,omitempty"`
+	CPUPercent          float64         `json:"cpu"`
+	Mem                 *MemInfo        `json:"mem,omitempty"` // UI expects mem object, not memPercent
+	Load                LoadAvg         `json:"load"`
+	Disk                []DiskInfo      `json:"disk,omitempty"`
+	NetIfaces           []NetInterface  `json:"netIfaces,omitempty"`
+	Hostname            string          `json:"hostname,omitempty"`
+	Platform            string          `json:"platform,omitempty"`
+	Release             string          `json:"release,omitempty"`
+	Arch                string          `json:"arch,omitempty"`
+	CPUs                int             `json:"cpus,omitempty"`
+	UptimeSec           uint64          `json:"uptimeSec,omitempty"`
+	Battery             *BatteryInfo    `json:"battery,omitempty"`
+	Thermal             []ThermalSensor `json:"thermal,omitempty"`
+	Updates             *UpdateInfo     `json:"updates,omitempty"`
+	LastReboot          string          `json:"lastReboot,omitempty"` // RFC3339 timestamp (UTC)
+	KernelVersion       string          `json:"kernelVersion,omitempty"`
+	SecurityPatchStatus string          `json:"securityPatchStatus,omitempty"`
+	ServiceHealth       *ServiceHealth  `json:"serviceHealth,omitempty"`
+	TimeSyncStatus      string          `json:"timeSyncStatus,omitempty"`
+	Timestamp           string          `json:"ts"`
 }
 
 type ServiceHealth struct {

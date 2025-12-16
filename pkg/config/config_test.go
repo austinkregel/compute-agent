@@ -114,6 +114,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 		"PONG_TIMEOUT_SEC":       os.Getenv("PONG_TIMEOUT_SEC"),
 		"ADMIN_ALLOWED_COMMANDS": os.Getenv("ADMIN_ALLOWED_COMMANDS"),
 		"AGENT_SKIP_TLS_VERIFY":  os.Getenv("AGENT_SKIP_TLS_VERIFY"),
+		"OHM_PORT":               os.Getenv("OHM_PORT"),
 	}
 	defer func() {
 		for k, v := range originalVars {
@@ -133,6 +134,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	os.Setenv("PONG_TIMEOUT_SEC", "100")
 	os.Setenv("ADMIN_ALLOWED_COMMANDS", "echo,uptime,ls")
 	os.Setenv("AGENT_SKIP_TLS_VERIFY", "true")
+	os.Setenv("OHM_PORT", "12345")
 
 	loaded, err := Load(cfgPath)
 	if err != nil {
@@ -162,6 +164,9 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	}
 	if !loaded.Transport.SkipTLSVerify {
 		t.Error("expected SkipTLSVerify to be true from env")
+	}
+	if loaded.OpenHardwareMonitorPort != 12345 {
+		t.Errorf("expected OpenHardwareMonitorPort 12345 from env, got %d", loaded.OpenHardwareMonitorPort)
 	}
 }
 
@@ -261,6 +266,9 @@ func TestApplyDefaults(t *testing.T) {
 	if cfg.PongTimeoutSec != 90 {
 		t.Errorf("expected default PongTimeoutSec 90, got %d", cfg.PongTimeoutSec)
 	}
+	if cfg.OpenHardwareMonitorPort != 8085 {
+		t.Errorf("expected default OpenHardwareMonitorPort 8085, got %d", cfg.OpenHardwareMonitorPort)
+	}
 	if cfg.Connectivity.TCPTestPort != 53 {
 		t.Errorf("expected default TCPTestPort 53, got %d", cfg.Connectivity.TCPTestPort)
 	}
@@ -304,12 +312,13 @@ func TestApplyDefaults(t *testing.T) {
 
 func TestApplyDefaults_RespectsExistingValues(t *testing.T) {
 	cfg := &Config{
-		ClientID:             "test",
-		ServerURL:            "https://example.com",
-		AuthToken:            "token",
-		StatsIntervalSec:     120,
-		HeartbeatIntervalSec: 40,
-		PongTimeoutSec:       120,
+		ClientID:                "test",
+		ServerURL:               "https://example.com",
+		AuthToken:               "token",
+		StatsIntervalSec:        120,
+		HeartbeatIntervalSec:    40,
+		PongTimeoutSec:          120,
+		OpenHardwareMonitorPort: 9001,
 		Admin: AdminConfig{
 			MaxConcurrent:     5,
 			DefaultTimeoutSec: 60,
@@ -333,6 +342,9 @@ func TestApplyDefaults_RespectsExistingValues(t *testing.T) {
 	}
 	if cfg.PongTimeoutSec != 120 {
 		t.Errorf("expected PongTimeoutSec to remain 120, got %d", cfg.PongTimeoutSec)
+	}
+	if cfg.OpenHardwareMonitorPort != 9001 {
+		t.Errorf("expected OpenHardwareMonitorPort to remain 9001, got %d", cfg.OpenHardwareMonitorPort)
 	}
 	if cfg.Admin.MaxConcurrent != 5 {
 		t.Errorf("expected MaxConcurrent to remain 5, got %d", cfg.Admin.MaxConcurrent)
