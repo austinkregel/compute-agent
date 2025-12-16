@@ -18,6 +18,8 @@ type Config struct {
 	AuthToken            string `json:"authToken"`
 	StatsIntervalSec     int    `json:"statsIntervalSec"`
 	HeartbeatIntervalSec int    `json:"heartbeatIntervalSec"`
+	UpdateCheckEnabled       *bool `json:"updateCheckEnabled"`
+	UpdateCheckIntervalHours int   `json:"updateCheckIntervalHours"`
 	// PongTimeoutSec controls when the agent should send proactive pings if idle.
 	// See requirements.md: pongTimeoutSec is 90s by default.
 	PongTimeoutSec int                `json:"pongTimeoutSec"`
@@ -128,6 +130,14 @@ func (c *Config) applyDefaults() {
 	if c.HeartbeatIntervalSec <= 0 {
 		c.HeartbeatIntervalSec = 20
 	}
+	// Updates: enabled by default, run every 12 hours.
+	if c.UpdateCheckIntervalHours <= 0 {
+		c.UpdateCheckIntervalHours = 12
+	}
+	if c.UpdateCheckEnabled == nil {
+		v := true
+		c.UpdateCheckEnabled = &v
+	}
 	if c.PongTimeoutSec <= 0 {
 		c.PongTimeoutSec = 90
 	}
@@ -189,6 +199,16 @@ func (c *Config) applyEnvOverrides() {
 			c.HeartbeatIntervalSec = parsed
 		}
 	}
+	if v := os.Getenv("UPDATE_CHECK_INTERVAL_HOURS"); v != "" {
+		if parsed, err := parseInt(v); err == nil {
+			c.UpdateCheckIntervalHours = parsed
+		}
+	}
+	if v := os.Getenv("UPDATE_CHECK_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			c.UpdateCheckEnabled = &b
+		}
+	}
 	if v := os.Getenv("PONG_TIMEOUT_SEC"); v != "" {
 		if parsed, err := parseInt(v); err == nil {
 			c.PongTimeoutSec = parsed
@@ -202,6 +222,13 @@ func (c *Config) applyEnvOverrides() {
 			c.Transport.SkipTLSVerify = b
 		}
 	}
+}
+
+func (c *Config) UpdateChecksEnabled() bool {
+	if c == nil || c.UpdateCheckEnabled == nil {
+		return true
+	}
+	return *c.UpdateCheckEnabled
 }
 
 func parseInt(val string) (int, error) {

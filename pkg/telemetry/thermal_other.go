@@ -9,3 +9,4 @@ func readLinuxSysfsTemperatures() ([]host.TemperatureStat, error) {
 }
 
 
+

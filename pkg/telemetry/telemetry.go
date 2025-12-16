@@ -2,6 +2,8 @@ package telemetry
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"runtime"
 	"strings"
@@ -33,15 +35,27 @@ type Publisher struct {
 	cfg     *config.Config
 	log     *logging.Logger
 	emitter transport.Emitter
+	updates *UpdateChecker
 
 	warnMu          sync.Mutex
 	lastBatteryWarn time.Time
 	lastThermalWarn time.Time
+
+	healthMu             sync.Mutex
+	lastTimeSyncCheck    time.Time
+	cachedTimeSyncStatus string
+	lastServiceCheck     time.Time
+	cachedServiceHealth  *ServiceHealth
 }
 
 // NewPublisher creates a telemetry publisher.
 func NewPublisher(cfg *config.Config, log *logging.Logger, emitter transport.Emitter) *Publisher {
-	return &Publisher{cfg: cfg, log: log, emitter: emitter}
+	p := &Publisher{cfg: cfg, log: log, emitter: emitter}
+	if cfg != nil && cfg.UpdateChecksEnabled() {
+		interval := time.Duration(cfg.UpdateCheckIntervalHours) * time.Hour
+		p.updates = NewUpdateChecker(interval)
+	}
+	return p
 }
 
 // Run blocks, emitting stats until context cancellation.
@@ -55,6 +69,15 @@ func (p *Publisher) Run(ctx context.Context) error {
 	defer ticker.Stop()
 
 	p.log.Info("telemetry loop starting", "intervalSec", intervalSec)
+
+	// Update checks run on their own cadence (default 12h) and are cached into stats samples.
+	if p.updates != nil {
+		go func() {
+			if err := p.updates.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				p.log.Debug("update checker exited", "error", err)
+			}
+		}()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -73,6 +96,16 @@ func (p *Publisher) EmitNow() {
 		return
 	}
 	p.emitSample()
+}
+
+// CheckUpdatesNow forces an immediate OS update check (best effort) and emits a fresh stats sample.
+// If update checks are disabled, this is a no-op.
+func (p *Publisher) CheckUpdatesNow() {
+	if p == nil || p.updates == nil {
+		return
+	}
+	p.updates.CheckNow(context.Background())
+	p.EmitNow()
 }
 
 func (p *Publisher) emitSample() {
@@ -111,11 +144,51 @@ func (p *Publisher) emitSample() {
 		sample.Platform = hi.Platform
 		sample.Release = hi.PlatformVersion
 		sample.Arch = hi.KernelArch
+		if strings.TrimSpace(hi.KernelVersion) != "" {
+			sample.KernelVersion = strings.TrimSpace(hi.KernelVersion)
+		}
+
+		// Derive last reboot timestamp from uptime (UTC).
+		if hi.Uptime > 0 {
+			boot := time.Now().UTC().Add(-time.Duration(hi.Uptime) * time.Second)
+			sample.LastReboot = boot.Format(time.RFC3339)
+		}
 	}
 	
 	// CPU count - use runtime.NumCPU() which returns the number of logical CPUs (cores/threads)
 	// This is more accurate than hi.Procs which represents the number of processes
 	sample.CPUs = runtime.NumCPU()
+
+	// Update status (cached) + human summary.
+	if p.updates != nil {
+		info := p.updates.Snapshot()
+		if strings.TrimSpace(info.LastChecked) != "" {
+			sample.Updates = &info
+			// Prefer a human-readable summary string so operators can triage quickly.
+			if info.CheckError != "" {
+				sample.SecurityPatchStatus = "unknown (update check failed)"
+			} else if info.Security > 0 {
+				sample.SecurityPatchStatus = fmt.Sprintf("%d security update(s) pending", info.Security)
+			} else if info.Available > 0 {
+				sample.SecurityPatchStatus = fmt.Sprintf("%d update(s) pending", info.Available)
+			} else {
+				sample.SecurityPatchStatus = "up to date"
+			}
+			if info.RestartRequired && sample.SecurityPatchStatus != "" {
+				sample.SecurityPatchStatus = sample.SecurityPatchStatus + "; reboot required"
+			}
+		}
+	}
+
+	// Host health details: best-effort and cached to avoid heavy commands each tick.
+	if runtime.GOOS == "linux" {
+		if ts := p.getTimeSyncStatusCached(); ts != "" {
+			sample.TimeSyncStatus = ts
+		}
+		if sh := p.getServiceHealthCached(); sh != nil {
+			sample.ServiceHealth = sh
+		}
+	}
 
 	// Battery - best effort, omitted on hosts without a battery (most servers).
 	if bi, err := getBatteryInfo(); err != nil {
@@ -234,6 +307,92 @@ func (p *Publisher) emitSample() {
 	if err := p.emitter.Emit("stats", map[string]any{"data": sample}); err != nil {
 		p.log.Debug("skipping stats emit (transport offline)", "error", err)
 	}
+}
+
+func (p *Publisher) getTimeSyncStatusCached() string {
+	// Recompute at most every 15 minutes.
+	const every = 15 * time.Minute
+	now := time.Now()
+
+	p.healthMu.Lock()
+	defer p.healthMu.Unlock()
+
+	if !p.lastTimeSyncCheck.IsZero() && now.Sub(p.lastTimeSyncCheck) < every {
+		return p.cachedTimeSyncStatus
+	}
+	p.lastTimeSyncCheck = now
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stdout, _, _, err := runCmd(ctx, "timedatectl", "show", "-p", "NTPSynchronized", "--value")
+	if err != nil {
+		p.cachedTimeSyncStatus = ""
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(stdout)) {
+	case "yes", "true", "1":
+		p.cachedTimeSyncStatus = "synced"
+	case "no", "false", "0":
+		p.cachedTimeSyncStatus = "unsynced"
+	default:
+		p.cachedTimeSyncStatus = ""
+	}
+	return p.cachedTimeSyncStatus
+}
+
+func (p *Publisher) getServiceHealthCached() *ServiceHealth {
+	// Recompute at most every 15 minutes.
+	const every = 15 * time.Minute
+	now := time.Now()
+
+	p.healthMu.Lock()
+	defer p.healthMu.Unlock()
+
+	if !p.lastServiceCheck.IsZero() && now.Sub(p.lastServiceCheck) < every {
+		return p.cachedServiceHealth
+	}
+	p.lastServiceCheck = now
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	stdout, _, _, err := runCmd(ctx, "systemctl", "list-units", "--type=service", "--all", "--no-legend", "--no-pager")
+	if err != nil {
+		p.cachedServiceHealth = nil
+		return nil
+	}
+
+	var total, running, failed int
+	for _, raw := range strings.Split(stdout, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		// Fields: UNIT LOAD ACTIVE SUB ...
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		unit := fields[0]
+		if !strings.HasSuffix(unit, ".service") {
+			continue
+		}
+		total++
+		active := strings.ToLower(fields[2])
+		sub := strings.ToLower(fields[3])
+		if active == "failed" {
+			failed++
+			continue
+		}
+		if active == "active" && sub == "running" {
+			running++
+		}
+	}
+	p.cachedServiceHealth = &ServiceHealth{
+		Total:   total,
+		Running: running,
+		Failed:  failed,
+	}
+	return p.cachedServiceHealth
 }
 
 func (p *Publisher) rateLimitedWarn(last *time.Time, every time.Duration, msg string, args ...any) {

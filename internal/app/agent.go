@@ -105,6 +105,7 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		BackupStart: agent.handleBackupStart,
 		SyncKeys:    agent.handleSyncKeys,
 		UpdateAgent: agent.handleAgentUpdate,
+		CheckUpdates: agent.handleCheckUpdates,
 	}
 
 	t, err := transport.New(transport.Config{
@@ -350,6 +351,17 @@ func (a *Agent) handleAgentUpdate(msg transport.UpdateAgentRequest) {
 			"detail": result.Detail,
 			"ts":     time.Now().UTC().Format(time.RFC3339Nano),
 		})
+	}()
+}
+
+func (a *Agent) handleCheckUpdates(_ transport.CheckUpdatesRequest) {
+	// Run asynchronously; update checks may touch package managers / Windows Update.
+	go func() {
+		if a.telemetry == nil {
+			return
+		}
+		a.log.Info("manual update check requested")
+		a.telemetry.CheckUpdatesNow()
 	}()
 }
 

@@ -211,3 +211,4 @@ func estimateBatteryTimes(dev *BatteryDevice) {
 		dev.TimeToFullSec = 0
 	}
 }
+

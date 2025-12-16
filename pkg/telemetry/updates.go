@@ -264,6 +264,7 @@ func fileExists(p string) bool {
 
 func runCmd(ctx context.Context, name string, args ...string) (stdout string, stderr string, exitCode int, err error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = telemetrySanitizedEnv()
 
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
@@ -291,6 +292,30 @@ func runCmd(ctx context.Context, name string, args ...string) (stdout string, st
 		return stdout, stderr, 124, runErr
 	}
 	return stdout, stderr, 1, runErr
+}
+
+func telemetrySanitizedEnv() []string {
+	// Intentionally minimal, to reduce leakage of secrets into child processes.
+	allow := []string{
+		"PATH",
+		"HOME",
+		"USER",
+		"LANG",
+		"LC_ALL",
+		"TERM",
+		"TMPDIR",
+		"TEMP",
+		// Windows:
+		"SystemRoot",
+		"ComSpec",
+	}
+	out := make([]string, 0, len(allow))
+	for _, key := range allow {
+		if val, ok := os.LookupEnv(key); ok {
+			out = append(out, key+"="+val)
+		}
+	}
+	return out
 }
 
 func truncateOneLine(s string, max int) string {

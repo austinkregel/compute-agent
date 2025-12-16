@@ -60,6 +60,7 @@ type Handlers struct {
 	BackupStart func(BackupRequest)
 	SyncKeys    func(SyncKeysRequest)
 	UpdateAgent func(UpdateAgentRequest)
+	CheckUpdates func(CheckUpdatesRequest)
 }
 
 // AdminCommand mirrors the payload emitted by the control plane.
@@ -131,6 +132,12 @@ type UpdateAgentRequest struct {
 	Repo string `json:"repo"`
 	Tag  string `json:"tag"`
 	At   string `json:"at"`
+}
+
+// CheckUpdatesRequest requests that the agent refresh OS update availability immediately.
+// Payload is optional; server may send an empty object.
+type CheckUpdatesRequest struct {
+	At string `json:"at,omitempty"`
 }
 
 // Client maintains the socket.io/WebSocket session to the control plane.
@@ -409,6 +416,14 @@ func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
 		c.log.Info("recv event", "event", "agent_update", "repo", msg.Repo, "tag", msg.Tag)
 		if c.handlers.UpdateAgent != nil {
 			c.handlers.UpdateAgent(msg)
+		}
+	})
+
+	socket.OnEvent("check_updates", func(msg CheckUpdatesRequest) {
+		c.touchTraffic()
+		c.log.Info("recv event", "event", "check_updates")
+		if c.handlers.CheckUpdates != nil {
+			c.handlers.CheckUpdates(msg)
 		}
 	})
 }
