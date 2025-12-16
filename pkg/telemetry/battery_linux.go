@@ -212,3 +212,4 @@ func estimateBatteryTimes(dev *BatteryDevice) {
 	}
 }
 
+

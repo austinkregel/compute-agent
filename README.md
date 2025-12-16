@@ -44,6 +44,7 @@ The agent reads JSON configuration (default `agent-config.json`, override with `
     "skipTlsVerify": false,
     "path": "/socket.io"
   },
+  "openHardwareMonitorPort": 8085,
   "shell": {
     "command": "/bin/bash",
     "args": ["-l"]
@@ -71,7 +72,15 @@ Environment overrides:
 | `UPDATE_CHECK_ENABLED`, `UPDATE_CHECK_INTERVAL_HOURS` | OS update check tuning |
 | `ADMIN_ALLOWED_COMMANDS` | comma-separated allow list |
 | `AGENT_SKIP_TLS_VERIFY` | `true/false` to bypass TLS verification (dev only) |
+| `OHM_PORT` | override OpenHardwareMonitor HTTP port (Windows thermal) |
 | `CLIENT_CONFIG_PATH` | alternate config path (also `--config`) |
+
+### Windows thermal telemetry (OpenHardwareMonitor)
+
+- OpenHardwareMonitor’s Remote Web Server must be enabled (Options → Remote Web Server).
+- The agent queries `http://localhost:<openHardwareMonitorPort>/data.json` (default `8085`).
+- Set `openHardwareMonitorPort` in config or `OHM_PORT` env if the port differs.
+- If OHM is unavailable, telemetry falls back to gopsutil sensors (best-effort).
 
 ## OS update checks (host maintenance insight)
 

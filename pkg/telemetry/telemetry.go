@@ -207,6 +207,9 @@ func (p *Publisher) emitSample() {
 			p.rateLimitedWarn(&p.lastThermalWarn, 10*time.Minute, "thermal telemetry collection failed", "source", "openhardwaremonitor", "error", ohmErr)
 		} else if len(ohmTemps) > 0 {
 			temps = ohmTemps
+			p.log.Debug("thermal telemetry collected via openhardwaremonitor", "sensors", len(temps))
+		} else {
+			p.log.Debug("openhardwaremonitor returned no temperature sensors; falling back to gopsutil")
 		}
 		if len(temps) == 0 {
 			temps, tempsErr = hostSensorsTemperatures()
