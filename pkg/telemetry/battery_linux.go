@@ -12,6 +12,10 @@ import (
 	"strings"
 )
 
+// batteryDebugLog is a debug logger function for battery discovery. Set to non-nil to enable debug logging.
+// The function takes a formatted message string (already formatted with fmt.Sprintf).
+var batteryDebugLog func(msg string)
+
 func getBatteryInfoImpl() (*BatteryInfo, error) {
 	const root = "/sys/class/power_supply"
 	ents, err := os.ReadDir(root)
@@ -32,8 +36,16 @@ func getBatteryInfoImpl() (*BatteryInfo, error) {
 		dir := filepath.Join(root, name)
 
 		typ, _ := readTrimmed(filepath.Join(dir, "type"))
-		if strings.ToLower(typ) != "battery" {
-			continue
+		typLower := strings.ToLower(typ)
+		// Check if type is "battery", or if type is missing/empty, check if name suggests it's a battery
+		// (common Linux convention: BAT0, BAT1, etc.)
+		if typLower != "battery" {
+			// Fallback: if type file is missing/empty, check device name
+			if typ == "" && (strings.HasPrefix(strings.ToUpper(name), "BAT") || strings.Contains(strings.ToLower(name), "battery")) {
+				// Device name suggests it's a battery, proceed
+			} else {
+				continue
+			}
 		}
 
 		dev := BatteryDevice{ID: name}
@@ -112,9 +124,16 @@ func getBatteryInfoImpl() (*BatteryInfo, error) {
 		// Time estimates (seconds)
 		estimateBatteryTimes(&dev)
 
-		// Only append if we got at least one meaningful signal.
-		if dev.Percent != 0 || dev.Status != "" || dev.EnergyNowWh != 0 || dev.PowerNowW != 0 || dev.TempC != 0 {
-			devices = append(devices, dev)
+		// Append the device if we successfully identified it as a battery.
+		// Even if we couldn't read all values (some may be 0 or empty), we should
+		// still report the battery exists. We always have at least an ID.
+		devices = append(devices, dev)
+
+		// Debug log discovered battery device
+		if batteryDebugLog != nil {
+			msg := fmt.Sprintf("battery discovered: id=%s type=%s percent=%.1f status=%s energyNowWh=%.3f energyFullWh=%.3f powerNowW=%.3f voltageNowV=%.3f tempC=%.1f",
+				dev.ID, typ, dev.Percent, dev.Status, dev.EnergyNowWh, dev.EnergyFullWh, dev.PowerNowW, dev.VoltageNowV, dev.TempC)
+			batteryDebugLog(msg)
 		}
 	}
 

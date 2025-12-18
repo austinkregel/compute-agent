@@ -30,6 +30,8 @@ var (
 	sysfsSensorsTemperatures      = readLinuxSysfsTemperatures
 	windowsOHMSensorsTemperatures = readWindowsOHMTemperatures
 	linuxGPUTemperatures          = readLinuxGPUTemps
+	diskPartitions                = disk.Partitions
+	diskUsage                     = disk.Usage
 )
 
 // Publisher periodically gathers system metrics and ships them over the transport.
@@ -56,6 +58,12 @@ func NewPublisher(cfg *config.Config, log *logging.Logger, emitter transport.Emi
 	if cfg != nil && cfg.UpdateChecksEnabled() {
 		interval := time.Duration(cfg.UpdateCheckIntervalHours) * time.Hour
 		p.updates = NewUpdateChecker(interval)
+	}
+	// Wire up battery debug logging if logger is available
+	if log != nil {
+		batteryDebugLog = func(msg string) {
+			log.Debug(msg)
+		}
 	}
 	return p
 }
@@ -262,14 +270,19 @@ func (p *Publisher) emitSample() {
 	}
 
 	// Disk usage - get all mount points
-	if partitions, err := disk.Partitions(false); err == nil {
+	if partitions, err := diskPartitions(false); err == nil {
 		var diskInfo []DiskInfo
 		for _, part := range partitions {
 			// Skip special filesystems
 			if part.Fstype == "" || part.Mountpoint == "" {
 				continue
 			}
-			if usage, err := disk.Usage(part.Mountpoint); err == nil {
+			// Filter out snap-related mounts on Linux (loop-mounted squashfs images under /snap and /var/snap).
+			if runtime.GOOS == "linux" &&
+				(strings.HasPrefix(part.Mountpoint, "/snap/") || strings.HasPrefix(part.Mountpoint, "/var/snap/")) {
+				continue
+			}
+			if usage, err := diskUsage(part.Mountpoint); err == nil {
 				diskInfo = append(diskInfo, DiskInfo{
 					Mount:    part.Mountpoint,
 					FSName:   part.Device,

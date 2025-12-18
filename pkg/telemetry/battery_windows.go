@@ -9,6 +9,9 @@ import (
 	"github.com/yusufpapurcu/wmi"
 )
 
+// batteryDebugLog is a debug logger function for battery discovery. Not used on Windows (uses WMI).
+var batteryDebugLog func(msg string)
+
 // Minimal WMI model for Win32_Battery.
 type win32Battery struct {
 	DeviceID                 string
