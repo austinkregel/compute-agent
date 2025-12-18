@@ -53,4 +53,3 @@ func (b *Bridge) ApplyBase64(ctx context.Context, b64 string) error {
 	}
 	return b.Apply(ctx, string(decoded))
 }
-

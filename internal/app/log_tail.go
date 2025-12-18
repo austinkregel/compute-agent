@@ -206,5 +206,3 @@ func (a *Agent) emitLogTailClosed(session string, reason string) {
 
 // ctxOrBackground is defined in agent.go; keep this file self-contained regarding tailing.
 var _ = bufio.NewReader
-
-

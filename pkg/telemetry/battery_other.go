@@ -6,5 +6,3 @@ package telemetry
 func getBatteryInfoImpl() (*BatteryInfo, error) {
 	return nil, nil
 }
-
-

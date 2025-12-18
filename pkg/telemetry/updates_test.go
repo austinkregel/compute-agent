@@ -107,4 +107,3 @@ func TestParseIntFromFirstMatch(t *testing.T) {
 		}
 	}
 }
-

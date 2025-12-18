@@ -7,8 +7,8 @@ import (
 // MockEmitter implements transport.Emitter for testing.
 // It records all emitted events for assertion.
 type MockEmitter struct {
-	mu       sync.RWMutex
-	events   []EmittedEvent
+	mu        sync.RWMutex
+	events    []EmittedEvent
 	connected bool
 }
 
@@ -91,7 +91,3 @@ func (m *MockEmitter) CountEvents(eventName string) int {
 	}
 	return count
 }
-
-
-
-

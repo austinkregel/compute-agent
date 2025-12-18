@@ -18,9 +18,9 @@ import (
 // UpdateInfo is a best-effort snapshot of OS update availability.
 //
 // Notes:
-// - This intentionally reports counts, not package/title lists, to keep payloads small and avoid
-//   leaking potentially sensitive software inventory.
-// - Security count is best-effort (varies by platform/package manager); if unknown it may be 0.
+//   - This intentionally reports counts, not package/title lists, to keep payloads small and avoid
+//     leaking potentially sensitive software inventory.
+//   - Security count is best-effort (varies by platform/package manager); if unknown it may be 0.
 type UpdateInfo struct {
 	Available       int    `json:"available"`
 	Security        int    `json:"security"`
@@ -354,5 +354,3 @@ func parseIntFromFirstMatch(s string) (int, bool) {
 	}
 	return 0, false
 }
-
-

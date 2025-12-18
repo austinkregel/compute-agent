@@ -55,4 +55,3 @@ func BuildConfig() *config.Config {
 		},
 	}
 }
-
