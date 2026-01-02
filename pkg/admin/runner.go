@@ -78,12 +78,19 @@ type CommandSummary struct {
 type shellSession struct {
 	id      string
 	cmd     *exec.Cmd
+	ctx     context.Context
 	cancel  context.CancelFunc
 	stdin   io.Writer
 	resize  func(int, int) error
 	closer  io.Closer
 	done    chan struct{}
 	started time.Time
+
+	idleTimeout time.Duration
+	activityCh  chan struct{}
+
+	closeReasonMu sync.Mutex
+	closeReason   string
 }
 
 // NewRunner constructs an admin runner.
@@ -369,11 +376,16 @@ func (r *Runner) StartShell(ctx context.Context, sessionID string) error {
 	cmd.Env = sanitizedEnv()
 
 	sess := &shellSession{
-		id:      sessionID,
-		cmd:     cmd,
-		cancel:  cancel,
-		done:    make(chan struct{}),
-		started: time.Now(),
+		id:         sessionID,
+		cmd:        cmd,
+		ctx:        ctx,
+		cancel:     cancel,
+		done:       make(chan struct{}),
+		started:    time.Now(),
+		activityCh: make(chan struct{}, 1),
+	}
+	if r.cfg.Shell.IdleTimeoutSec > 0 {
+		sess.idleTimeout = time.Duration(r.cfg.Shell.IdleTimeoutSec) * time.Second
 	}
 
 	var (
@@ -427,6 +439,9 @@ func (r *Runner) StartShell(ctx context.Context, sessionID string) error {
 	r.sessionsMu.Unlock()
 
 	go r.waitForShell(sessionID, sess)
+	if sess.idleTimeout > 0 {
+		go r.idleWatch(sessionID, sess)
+	}
 	return nil
 }
 
@@ -439,6 +454,7 @@ func (r *Runner) SendInput(sessionID, data string) error {
 	if _, err := io.WriteString(sess.stdin, data); err != nil {
 		return err
 	}
+	sess.signalActivity()
 	return nil
 }
 
@@ -449,18 +465,27 @@ func (r *Runner) Resize(sessionID string, cols, rows int) error {
 		return errors.New("unknown session")
 	}
 	if sess.resize != nil {
-		return sess.resize(cols, rows)
+		err := sess.resize(cols, rows)
+		sess.signalActivity()
+		return err
 	}
 	return nil
 }
 
 // CloseShell terminates the PTY session.
 func (r *Runner) CloseShell(sessionID string) error {
+	return r.CloseShellWithReason(sessionID, "closed")
+}
+
+// CloseShellWithReason terminates the PTY session and sets the close reason that will be
+// surfaced in the OnClosed callback.
+func (r *Runner) CloseShellWithReason(sessionID string, reason string) error {
 	sess := r.removeSession(sessionID)
 	if sess == nil {
 		return nil
 	}
 	defer r.release()
+	sess.setCloseReason(reason)
 	sess.cancel()
 	if sess.closer != nil {
 		_ = sess.closer.Close()
@@ -483,7 +508,9 @@ func (r *Runner) waitForShell(sessionID string, sess *shellSession) {
 	close(sess.done)
 
 	reason := "exit"
-	if err != nil {
+	if cr := sess.getCloseReason(); cr != "" {
+		reason = cr
+	} else if err != nil {
 		reason = err.Error()
 	}
 	r.callbacks.OnClosed(sessionID, code, reason)
@@ -495,6 +522,7 @@ func (r *Runner) pipeOutput(sessionID string, reader io.Reader, sess *shellSessi
 	for {
 		n, err := buf.Read(tmp)
 		if n > 0 {
+			sess.signalActivity()
 			data := make([]byte, n)
 			copy(data, tmp[:n])
 			r.callbacks.OnOutput(sessionID, data)
@@ -506,6 +534,63 @@ func (r *Runner) pipeOutput(sessionID string, reader io.Reader, sess *shellSessi
 			return
 		}
 	}
+}
+
+func (r *Runner) idleWatch(sessionID string, sess *shellSession) {
+	timeout := sess.idleTimeout
+	if timeout <= 0 {
+		return
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	reset := func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(timeout)
+	}
+
+	for {
+		select {
+		case <-sess.ctx.Done():
+			return
+		case <-sess.done:
+			return
+		case <-sess.activityCh:
+			reset()
+		case <-timer.C:
+			r.log.Info("shell idle timeout", "session", sessionID, "timeoutSec", int(timeout.Seconds()))
+			_ = r.CloseShellWithReason(sessionID, "idle timeout")
+			return
+		}
+	}
+}
+
+func (s *shellSession) signalActivity() {
+	if s == nil || s.activityCh == nil {
+		return
+	}
+	select {
+	case s.activityCh <- struct{}{}:
+	default:
+	}
+}
+
+func (s *shellSession) setCloseReason(reason string) {
+	s.closeReasonMu.Lock()
+	defer s.closeReasonMu.Unlock()
+	s.closeReason = strings.TrimSpace(reason)
+}
+
+func (s *shellSession) getCloseReason() string {
+	s.closeReasonMu.Lock()
+	defer s.closeReasonMu.Unlock()
+	return s.closeReason
 }
 
 func (r *Runner) acquire(ctx context.Context) error {

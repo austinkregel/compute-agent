@@ -681,6 +681,54 @@ func TestShell_ClosedCallback(t *testing.T) {
 	}
 }
 
+func TestShell_IdleTimeout_AutoClose(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PTY test not portable to windows")
+	}
+
+	closed := make(chan struct{})
+	var closedReason string
+
+	log, _ := logging.New(logging.Options{Level: "error"})
+	cfg := &config.Config{
+		Admin: config.AdminConfig{
+			EnableShell:   true,
+			MaxConcurrent: 1,
+		},
+		Shell: config.ShellConfig{
+			// Use a quiet, long-running command so the session is truly idle.
+			Command:        "/bin/sleep",
+			Args:           []string{"1000"},
+			IdleTimeoutSec: 1,
+		},
+	}
+	callbacks := ShellCallbacks{
+		OnClosed: func(session string, code int, reason string) {
+			closedReason = reason
+			select {
+			case <-closed:
+			default:
+				close(closed)
+			}
+		},
+	}
+	r := NewRunner(cfg, log, callbacks)
+
+	if err := r.StartShell(context.Background(), "session-1"); err != nil {
+		t.Fatalf("StartShell: %v", err)
+	}
+
+	select {
+	case <-closed:
+		// ok
+	case <-time.After(3 * time.Second):
+		t.Fatalf("expected shell to close due to idle timeout")
+	}
+	if closedReason != "idle timeout" {
+		t.Fatalf("expected close reason %q, got %q", "idle timeout", closedReason)
+	}
+}
+
 func TestRunCommand_DefaultTimeout(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping timeout test in short mode")

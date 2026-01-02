@@ -106,6 +106,10 @@ type LoggingConfig struct {
 type ShellConfig struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args"`
+
+	// IdleTimeoutSec closes interactive shell sessions after this many seconds without
+	// any activity (input/output/resize). Defaults to 60.
+	IdleTimeoutSec int `json:"idleTimeoutSec"`
 }
 
 // DefaultPath returns the config path honoring CLIENT_CONFIG_PATH.
@@ -193,6 +197,9 @@ func (c *Config) applyDefaults() {
 				c.Shell.Args = []string{"-l"}
 			}
 		}
+	}
+	if c.Shell.IdleTimeoutSec <= 0 {
+		c.Shell.IdleTimeoutSec = 60
 	}
 	if c.Logging.FilePath == "" {
 		if env := os.Getenv("LOG_FILE"); env != "" {

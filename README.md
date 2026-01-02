@@ -47,7 +47,8 @@ The agent reads JSON configuration (default `agent-config.json`, override with `
   "openHardwareMonitorPort": 8085,
   "shell": {
     "command": "/bin/bash",
-    "args": ["-l"]
+    "args": ["-l"],
+    "idleTimeoutSec": 60
   },
   "dirBrowse": {
     "allowedRoots": [],
