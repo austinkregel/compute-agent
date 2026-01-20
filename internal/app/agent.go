@@ -140,6 +140,7 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		ReconnectMax:      30 * time.Second,
 		HeartbeatInterval: time.Duration(cfg.HeartbeatIntervalSec) * time.Second,
 		PongTimeout:       time.Duration(cfg.PongTimeoutSec) * time.Second,
+		MaxClockSkew:      time.Duration(cfg.Transport.MaxClockSkewSec) * time.Second,
 	}, log.With("component", "transport"), handlers)
 	if err != nil {
 		return nil, fmt.Errorf("transport: %w", err)

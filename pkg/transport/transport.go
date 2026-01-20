@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -21,11 +22,15 @@ import (
 	eio "github.com/karagenc/socket.io-go/engine.io"
 	"nhooyr.io/websocket"
 
+	"github.com/austinkregel/compute-agent/pkg/cmdsig"
 	"github.com/austinkregel/compute-agent/pkg/logging"
 )
 
 // ErrNotConnected is returned when emitting before the socket is ready.
 var ErrNotConnected = errors.New("transport: not connected")
+
+// ErrCommandVerificationFailed is returned when a signed command fails verification.
+var ErrCommandVerificationFailed = errors.New("transport: command verification failed")
 
 // Emitter exposes the minimal functionality needed by subsystems that emit events.
 type Emitter interface {
@@ -44,6 +49,10 @@ type Config struct {
 	ReconnectMax      time.Duration
 	HeartbeatInterval time.Duration
 	PongTimeout       time.Duration
+
+	// MaxClockSkew is the maximum allowed difference between server and agent
+	// clocks for signed command verification. Default: 5 minutes.
+	MaxClockSkew time.Duration
 }
 
 // Handlers capture callbacks for server-originated events.
@@ -277,6 +286,10 @@ type Client struct {
 	// control-plane traffic. A value of 0 means "not connected / unknown".
 	lastTraffic atomic.Int64
 	helloAcked  atomic.Bool
+
+	// Command signature verification (per-session)
+	verifierMu sync.RWMutex
+	verifier   *cmdsig.Verifier
 }
 
 // New builds a transport client with default backoff settings.
@@ -375,6 +388,7 @@ func (c *Client) Emit(event string, payload any) error {
 func (c *Client) connectOnce(ctx context.Context) error {
 	c.helloAcked.Store(false)
 	c.lastTraffic.Store(0)
+	c.clearVerifier() // Reset signature verifier for new session
 
 	connectURL, err := c.handshakeURL()
 	if err != nil {
@@ -441,9 +455,30 @@ func (c *Client) connectOnce(ctx context.Context) error {
 }
 
 func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
-	socket.OnEvent("hello_ack", func(_ struct{}) {
+	// HelloAckPayload contains optional session nonce for command signing.
+	type HelloAckPayload struct {
+		SessionNonce string `json:"sessionNonce,omitempty"`
+	}
+
+	socket.OnEvent("hello_ack", func(msg HelloAckPayload) {
 		c.helloAcked.Store(true)
 		c.touchTraffic()
+
+		// Command signing is mandatory - server MUST provide session nonce
+		if msg.SessionNonce == "" {
+			c.log.Error("server did not provide session nonce - command signing required")
+			// Continue but commands will be rejected until we get a valid nonce
+		} else {
+			sessionKey := cmdsig.DeriveSessionKey(c.cfg.AuthToken, msg.SessionNonce)
+			verifier := cmdsig.NewVerifier(sessionKey)
+			if c.cfg.MaxClockSkew > 0 {
+				verifier.SetMaxClockSkew(c.cfg.MaxClockSkew)
+			}
+			c.setVerifier(verifier)
+			c.log.Info("command signing initialized",
+				"noncePrefix", msg.SessionNonce[:8]+"...")
+		}
+
 		c.log.Debug("recv event", "event", "hello_ack")
 		if c.handlers.Hello != nil {
 			c.handlers.Hello()
@@ -458,144 +493,124 @@ func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
 		_ = c.Emit("pong", map[string]int64{"ts": msg.TS})
 	})
 
+	// Handler for signed commands from the server.
+	// This is the secure path for all security-sensitive operations.
+	socket.OnEvent("signed_command", func(rawEnvelope json.RawMessage) {
+		c.touchTraffic()
+
+		var envelope cmdsig.SignedEnvelope
+		if err := json.Unmarshal(rawEnvelope, &envelope); err != nil {
+			c.log.Error("failed to unmarshal signed_command envelope", "error", err)
+			return
+		}
+
+		// Verify the signature
+		if err := c.verifyCommand(&envelope); err != nil {
+			c.log.Warn("rejecting signed_command", "event", envelope.Event, "error", err)
+			// Optionally emit rejection back to server
+			_ = c.Emit("command_rejected", map[string]any{
+				"event": envelope.Event,
+				"seq":   envelope.Seq,
+				"error": err.Error(),
+			})
+			return
+		}
+
+		c.log.Debug("verified signed_command", "event", envelope.Event, "seq", envelope.Seq)
+
+		// Dispatch to the appropriate handler based on event type
+		c.dispatchSignedCommand(envelope.Event, envelope.Payload)
+	})
+
+	// Legacy unsigned event handlers - ALL commands must be signed, so these
+	// handlers reject unsigned commands and log a warning.
 	socket.OnEvent("admin_run", func(msg AdminCommand) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "admin_run")
-		if c.handlers.AdminRun != nil {
-			c.handlers.AdminRun(msg)
-		}
+		c.log.Warn("rejecting unsigned admin_run - use signed_command")
+		// Unsigned commands are not allowed
 	})
+
+	// All commands MUST be signed. These legacy event handlers reject unsigned
+	// commands unconditionally. The server must use signed_command event.
 
 	socket.OnEvent("shell_start", func(msg ShellStart) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "shell_start", "session", msg.Session)
-		if c.handlers.ShellStart != nil {
-			c.handlers.ShellStart(msg)
-		}
+		c.log.Warn("rejecting unsigned shell_start - use signed_command")
 	})
 	socket.OnEvent("shell_input", func(msg ShellInput) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "shell_input", "session", msg.Session, "bytes", len(msg.Data))
-		if c.handlers.ShellInput != nil {
-			c.handlers.ShellInput(msg)
-		}
+		c.log.Warn("rejecting unsigned shell_input - use signed_command")
 	})
 	socket.OnEvent("shell_resize", func(msg ShellResize) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "shell_resize", "session", msg.Session, "cols", msg.Cols, "rows", msg.Rows)
-		if c.handlers.ShellResize != nil {
-			c.handlers.ShellResize(msg)
-		}
+		c.log.Warn("rejecting unsigned shell_resize - use signed_command")
 	})
 	socket.OnEvent("shell_close", func(msg ShellClose) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "shell_close", "session", msg.Session)
-		if c.handlers.ShellClose != nil {
-			c.handlers.ShellClose(msg)
-		}
+		c.log.Warn("rejecting unsigned shell_close - use signed_command")
 	})
 
 	socket.OnEvent("log_tail_start", func(msg LogTailStart) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "log_tail_start", "session", msg.Session, "lines", msg.Lines)
-		if c.handlers.LogTailStart != nil {
-			c.handlers.LogTailStart(msg)
-		}
+		c.log.Warn("rejecting unsigned log_tail_start - use signed_command")
 	})
 
 	socket.OnEvent("log_tail_stop", func(msg LogTailStop) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "log_tail_stop", "session", msg.Session)
-		if c.handlers.LogTailStop != nil {
-			c.handlers.LogTailStop(msg)
-		}
+		c.log.Warn("rejecting unsigned log_tail_stop - use signed_command")
 	})
 
 	socket.OnEvent("backup_plan", func(msg BackupRequest) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "backup_plan", "planId", msg.PlanID)
-		if c.handlers.BackupPlan != nil {
-			c.handlers.BackupPlan(msg)
-		}
+		c.log.Warn("rejecting unsigned backup_plan - use signed_command")
 	})
 	socket.OnEvent("backup_start", func(msg BackupRequest) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "backup_start", "planId", msg.PlanID)
-		if c.handlers.BackupStart != nil {
-			c.handlers.BackupStart(msg)
-		}
+		c.log.Warn("rejecting unsigned backup_start - use signed_command")
 	})
 	socket.OnEvent("sync_keys", func(msg SyncKeysRequest) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "sync_keys", "user", msg.User)
-		if c.handlers.SyncKeys != nil {
-			c.handlers.SyncKeys(msg)
-		}
+		c.log.Warn("rejecting unsigned sync_keys - use signed_command")
 	})
 
 	socket.OnEvent("agent_update", func(msg UpdateAgentRequest) {
 		c.touchTraffic()
-		c.log.Info("recv event", "event", "agent_update", "repo", msg.Repo, "tag", msg.Tag)
-		if c.handlers.UpdateAgent != nil {
-			c.handlers.UpdateAgent(msg)
-		}
+		c.log.Warn("rejecting unsigned agent_update - use signed_command")
 	})
 
 	socket.OnEvent("check_updates", func(msg CheckUpdatesRequest) {
 		c.touchTraffic()
-		c.log.Info("recv event", "event", "check_updates")
-		if c.handlers.CheckUpdates != nil {
-			c.handlers.CheckUpdates(msg)
-		}
+		c.log.Warn("rejecting unsigned check_updates - use signed_command")
 	})
 
 	socket.OnEvent("dir_list_request", func(msg DirListRequest) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "dir_list_request")
-		if c.handlers.DirList != nil {
-			c.handlers.DirList(msg)
-		}
+		c.log.Warn("rejecting unsigned dir_list_request - use signed_command")
 	})
 
-	// File operations
 	socket.OnEvent("file_put_start", func(msg FilePutStartRequest) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "file_put_start", "requestId", msg.RequestID, "path", msg.Path)
-		if c.handlers.FilePutStart != nil {
-			c.handlers.FilePutStart(msg)
-		}
+		c.log.Warn("rejecting unsigned file_put_start - use signed_command")
 	})
 
 	socket.OnEvent("file_put_chunk", func(msg FilePutChunk) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "file_put_chunk", "requestId", msg.RequestID, "offset", msg.Offset, "dataLen", len(msg.Data))
-		if c.handlers.FilePutChunk != nil {
-			c.handlers.FilePutChunk(msg)
-		}
+		c.log.Warn("rejecting unsigned file_put_chunk - use signed_command")
 	})
 
 	socket.OnEvent("file_put_finish", func(msg FilePutFinishRequest) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "file_put_finish", "requestId", msg.RequestID)
-		if c.handlers.FilePutFinish != nil {
-			c.handlers.FilePutFinish(msg)
-		}
+		c.log.Warn("rejecting unsigned file_put_finish - use signed_command")
 	})
 
 	socket.OnEvent("file_delete_request", func(msg FileDeleteRequest) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "file_delete_request", "requestId", msg.RequestID, "path", msg.Path)
-		if c.handlers.FileDelete != nil {
-			c.handlers.FileDelete(msg)
-		}
+		c.log.Warn("rejecting unsigned file_delete_request - use signed_command")
 	})
 
 	socket.OnEvent("file_chmod_request", func(msg FileChmodRequest) {
 		c.touchTraffic()
-		c.log.Debug("recv event", "event", "file_chmod_request", "requestId", msg.RequestID, "path", msg.Path, "mode", msg.Mode)
-		if c.handlers.FileChmod != nil {
-			c.handlers.FileChmod(msg)
-		}
+		c.log.Warn("rejecting unsigned file_chmod_request - use signed_command")
 	})
 }
 
@@ -640,6 +655,236 @@ func (c *Client) setSocket(socket sio.ClientSocket) {
 
 func (c *Client) touchTraffic() {
 	c.lastTraffic.Store(time.Now().UnixNano())
+}
+
+// setVerifier sets the command signature verifier for this session.
+func (c *Client) setVerifier(v *cmdsig.Verifier) {
+	c.verifierMu.Lock()
+	defer c.verifierMu.Unlock()
+	c.verifier = v
+}
+
+// clearVerifier removes the current verifier (e.g., on disconnect).
+func (c *Client) clearVerifier() {
+	c.verifierMu.Lock()
+	defer c.verifierMu.Unlock()
+	c.verifier = nil
+}
+
+// getVerifier returns the current verifier, if any.
+func (c *Client) getVerifier() *cmdsig.Verifier {
+	c.verifierMu.RLock()
+	defer c.verifierMu.RUnlock()
+	return c.verifier
+}
+
+// verifyCommand checks if a signed command envelope is valid.
+// Returns nil if valid, error otherwise. All commands MUST be signed.
+func (c *Client) verifyCommand(envelope *cmdsig.SignedEnvelope) error {
+	verifier := c.getVerifier()
+
+	// Command signing is mandatory - if we don't have a verifier, reject
+	if verifier == nil {
+		c.log.Error("rejecting command: no session verifier (server may be outdated)")
+		return ErrCommandVerificationFailed
+	}
+
+	if err := verifier.Verify(envelope); err != nil {
+		c.log.Warn("command signature verification failed",
+			"event", envelope.Event,
+			"seq", envelope.Seq,
+			"error", err)
+		return err
+	}
+	return nil
+}
+
+// dispatchSignedCommand routes a verified command payload to the appropriate handler.
+func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
+	switch event {
+	case "admin_run":
+		var msg AdminCommand
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal admin_run payload", "error", err)
+			return
+		}
+		if c.handlers.AdminRun != nil {
+			c.handlers.AdminRun(msg)
+		}
+
+	case "shell_start":
+		var msg ShellStart
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal shell_start payload", "error", err)
+			return
+		}
+		if c.handlers.ShellStart != nil {
+			c.handlers.ShellStart(msg)
+		}
+
+	case "shell_input":
+		var msg ShellInput
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal shell_input payload", "error", err)
+			return
+		}
+		if c.handlers.ShellInput != nil {
+			c.handlers.ShellInput(msg)
+		}
+
+	case "shell_resize":
+		var msg ShellResize
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal shell_resize payload", "error", err)
+			return
+		}
+		if c.handlers.ShellResize != nil {
+			c.handlers.ShellResize(msg)
+		}
+
+	case "shell_close":
+		var msg ShellClose
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal shell_close payload", "error", err)
+			return
+		}
+		if c.handlers.ShellClose != nil {
+			c.handlers.ShellClose(msg)
+		}
+
+	case "log_tail_start":
+		var msg LogTailStart
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal log_tail_start payload", "error", err)
+			return
+		}
+		if c.handlers.LogTailStart != nil {
+			c.handlers.LogTailStart(msg)
+		}
+
+	case "log_tail_stop":
+		var msg LogTailStop
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal log_tail_stop payload", "error", err)
+			return
+		}
+		if c.handlers.LogTailStop != nil {
+			c.handlers.LogTailStop(msg)
+		}
+
+	case "backup_plan":
+		var msg BackupRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal backup_plan payload", "error", err)
+			return
+		}
+		if c.handlers.BackupPlan != nil {
+			c.handlers.BackupPlan(msg)
+		}
+
+	case "backup_start":
+		var msg BackupRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal backup_start payload", "error", err)
+			return
+		}
+		if c.handlers.BackupStart != nil {
+			c.handlers.BackupStart(msg)
+		}
+
+	case "sync_keys":
+		var msg SyncKeysRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal sync_keys payload", "error", err)
+			return
+		}
+		if c.handlers.SyncKeys != nil {
+			c.handlers.SyncKeys(msg)
+		}
+
+	case "agent_update":
+		var msg UpdateAgentRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal agent_update payload", "error", err)
+			return
+		}
+		if c.handlers.UpdateAgent != nil {
+			c.handlers.UpdateAgent(msg)
+		}
+
+	case "check_updates":
+		var msg CheckUpdatesRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal check_updates payload", "error", err)
+			return
+		}
+		if c.handlers.CheckUpdates != nil {
+			c.handlers.CheckUpdates(msg)
+		}
+
+	case "dir_list_request":
+		var msg DirListRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal dir_list_request payload", "error", err)
+			return
+		}
+		if c.handlers.DirList != nil {
+			c.handlers.DirList(msg)
+		}
+
+	case "file_put_start":
+		var msg FilePutStartRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal file_put_start payload", "error", err)
+			return
+		}
+		if c.handlers.FilePutStart != nil {
+			c.handlers.FilePutStart(msg)
+		}
+
+	case "file_put_chunk":
+		var msg FilePutChunk
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal file_put_chunk payload", "error", err)
+			return
+		}
+		if c.handlers.FilePutChunk != nil {
+			c.handlers.FilePutChunk(msg)
+		}
+
+	case "file_put_finish":
+		var msg FilePutFinishRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal file_put_finish payload", "error", err)
+			return
+		}
+		if c.handlers.FilePutFinish != nil {
+			c.handlers.FilePutFinish(msg)
+		}
+
+	case "file_delete_request":
+		var msg FileDeleteRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal file_delete_request payload", "error", err)
+			return
+		}
+		if c.handlers.FileDelete != nil {
+			c.handlers.FileDelete(msg)
+		}
+
+	case "file_chmod_request":
+		var msg FileChmodRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal file_chmod_request payload", "error", err)
+			return
+		}
+		if c.handlers.FileChmod != nil {
+			c.handlers.FileChmod(msg)
+		}
+
+	default:
+		c.log.Warn("unknown signed command event", "event", event)
+	}
 }
 
 func (c *Client) proactivePingLoop(ctx context.Context, stop <-chan struct{}) {

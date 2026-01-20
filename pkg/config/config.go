@@ -94,6 +94,12 @@ type BackupConfig struct {
 type TransportConfig struct {
 	SkipTLSVerify bool   `json:"skipTlsVerify"`
 	Path          string `json:"path"`
+
+	// MaxClockSkewSec is the maximum allowed clock difference (in seconds)
+	// between server and agent for signed command verification.
+	// Default: 300 (5 minutes).
+	// Note: Command signing is mandatory and cannot be disabled.
+	MaxClockSkewSec int `json:"maxClockSkewSec"`
 }
 
 // LoggingConfig describes log destination and verbosity.
@@ -186,6 +192,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Transport.Path == "" {
 		c.Transport.Path = "/socket.io"
+	}
+	if c.Transport.MaxClockSkewSec <= 0 {
+		c.Transport.MaxClockSkewSec = 300 // 5 minutes
 	}
 	if c.Shell.Command == "" {
 		if runtime.GOOS == "windows" {
