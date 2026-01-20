@@ -543,3 +543,373 @@ func TestHandshakeURL_SignatureFormat(t *testing.T) {
 		t.Errorf("sig2 is not valid hex: %v", err)
 	}
 }
+
+func TestHTTPTransport_NoSkipTLSVerify(t *testing.T) {
+	cfg := Config{
+		ServerURL:     "https://example.com",
+		ClientID:      "test",
+		AuthToken:     "token",
+		SkipTLSVerify: false,
+	}
+
+	baseURL, _ := buildBaseURL(cfg.ServerURL, "/socket.io")
+	client := &Client{
+		cfg:     cfg,
+		baseURL: baseURL,
+	}
+
+	transport := client.httpTransport()
+	if transport == nil {
+		t.Fatal("httpTransport() returned nil")
+	}
+
+	tr, ok := transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", transport)
+	}
+	// When SkipTLSVerify is false, TLSClientConfig may be nil or InsecureSkipVerify should be false
+	if tr.TLSClientConfig != nil && tr.TLSClientConfig.InsecureSkipVerify {
+		t.Error("expected InsecureSkipVerify=false when SkipTLSVerify is disabled")
+	}
+}
+
+func TestBuildBaseURL_MoreCases(t *testing.T) {
+	tests := []struct {
+		name       string
+		serverURL  string
+		socketPath string
+		wantPath   string
+		wantHost   string
+		wantErr    bool
+	}{
+		{
+			name:       "with port",
+			serverURL:  "https://example.com:8443",
+			socketPath: "/socket.io",
+			wantPath:   "/socket.io/",
+			wantHost:   "example.com:8443",
+		},
+		{
+			name:       "http scheme",
+			serverURL:  "http://localhost:3000",
+			socketPath: "/socket.io",
+			wantPath:   "/socket.io/",
+			wantHost:   "localhost:3000",
+		},
+		{
+			name:       "nested path",
+			serverURL:  "https://example.com/api/v1",
+			socketPath: "/ws",
+			wantPath:   "/api/v1/ws/",
+			wantHost:   "example.com",
+		},
+		{
+			name:       "double slashes in path",
+			serverURL:  "https://example.com//api//",
+			socketPath: "//socket.io//",
+			wantPath:   "/api/socket.io/",
+			wantHost:   "example.com",
+		},
+		{
+			name:       "empty path",
+			serverURL:  "https://example.com",
+			socketPath: "",
+			wantPath:   "/",
+			wantHost:   "example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u, err := buildBaseURL(tt.serverURL, tt.socketPath)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("buildBaseURL() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil {
+				return
+			}
+			if u.Path != tt.wantPath {
+				t.Errorf("buildBaseURL() path = %q, want %q", u.Path, tt.wantPath)
+			}
+			if u.Host != tt.wantHost {
+				t.Errorf("buildBaseURL() host = %q, want %q", u.Host, tt.wantHost)
+			}
+		})
+	}
+}
+
+func TestEnsureTypeCompat_VariousTypes(t *testing.T) {
+	// Test with int payload
+	if got := ensureTypeCompat(42); got != 42 {
+		t.Errorf("expected int payload unchanged, got %v", got)
+	}
+
+	// Test with slice payload
+	slice := []string{"a", "b"}
+	gotSlice := ensureTypeCompat(slice)
+	if _, ok := gotSlice.([]string); !ok {
+		t.Errorf("expected slice payload unchanged, got %T", gotSlice)
+	}
+
+	// Test with nil
+	if got := ensureTypeCompat(nil); got != nil {
+		t.Errorf("expected nil unchanged, got %v", got)
+	}
+
+	// Test with struct (not a map)
+	s := struct{ Name string }{"test"}
+	if got := ensureTypeCompat(s); got != s {
+		t.Errorf("expected struct unchanged")
+	}
+}
+
+func TestClient_TouchTraffic(t *testing.T) {
+	cfg := Config{
+		ServerURL:  "https://example.com",
+		ClientID:   "test",
+		AuthToken:  "token",
+		SocketPath: "/socket.io",
+	}
+
+	baseURL, _ := buildBaseURL(cfg.ServerURL, cfg.SocketPath)
+	client := &Client{
+		cfg:     cfg,
+		baseURL: baseURL,
+	}
+
+	// Initially should be 0
+	if client.lastTraffic.Load() != 0 {
+		t.Error("expected initial lastTraffic to be 0")
+	}
+
+	// After touch, should be non-zero
+	client.touchTraffic()
+	if client.lastTraffic.Load() == 0 {
+		t.Error("expected lastTraffic to be set after touchTraffic()")
+	}
+
+	// Should be recent (within last second)
+	now := time.Now().UnixNano()
+	diff := now - client.lastTraffic.Load()
+	if diff < 0 || diff > int64(time.Second) {
+		t.Error("lastTraffic should be within the last second")
+	}
+}
+
+func TestClient_HelloAcked(t *testing.T) {
+	cfg := Config{
+		ServerURL:  "https://example.com",
+		ClientID:   "test",
+		AuthToken:  "token",
+		SocketPath: "/socket.io",
+	}
+
+	baseURL, _ := buildBaseURL(cfg.ServerURL, cfg.SocketPath)
+	client := &Client{
+		cfg:     cfg,
+		baseURL: baseURL,
+	}
+
+	// Initially should be false
+	if client.helloAcked.Load() {
+		t.Error("expected initial helloAcked to be false")
+	}
+
+	// Set to true
+	client.helloAcked.Store(true)
+	if !client.helloAcked.Load() {
+		t.Error("expected helloAcked to be true after Store(true)")
+	}
+}
+
+func TestClient_CurrentSocket_NilWhenNotSet(t *testing.T) {
+	cfg := Config{
+		ServerURL:  "https://example.com",
+		ClientID:   "test",
+		AuthToken:  "token",
+		SocketPath: "/socket.io",
+	}
+
+	baseURL, _ := buildBaseURL(cfg.ServerURL, cfg.SocketPath)
+	client := &Client{
+		cfg:     cfg,
+		baseURL: baseURL,
+	}
+
+	// Should return nil when not connected
+	if sock := client.currentSocket(); sock != nil {
+		t.Error("expected nil socket when not connected")
+	}
+}
+
+func TestNew_CustomTimeouts(t *testing.T) {
+	cfg := Config{
+		ServerURL:         "https://example.com",
+		ClientID:          "test",
+		AuthToken:         "token",
+		SocketPath:        "/socket.io",
+		ReconnectMin:      5 * time.Second,
+		ReconnectMax:      60 * time.Second,
+		HeartbeatInterval: 30 * time.Second,
+		PongTimeout:       120 * time.Second,
+	}
+
+	client, err := New(cfg, nil, Handlers{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if client.cfg.ReconnectMin != 5*time.Second {
+		t.Errorf("expected ReconnectMin 5s, got %v", client.cfg.ReconnectMin)
+	}
+	if client.cfg.ReconnectMax != 60*time.Second {
+		t.Errorf("expected ReconnectMax 60s, got %v", client.cfg.ReconnectMax)
+	}
+	if client.cfg.HeartbeatInterval != 30*time.Second {
+		t.Errorf("expected HeartbeatInterval 30s, got %v", client.cfg.HeartbeatInterval)
+	}
+	if client.cfg.PongTimeout != 120*time.Second {
+		t.Errorf("expected PongTimeout 120s, got %v", client.cfg.PongTimeout)
+	}
+}
+
+func TestNextDelay_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		current  time.Duration
+		max      time.Duration
+		expected time.Duration
+	}{
+		{
+			name:     "zero current",
+			current:  0,
+			max:      30 * time.Second,
+			expected: 0,
+		},
+		{
+			name:     "negative current becomes zero",
+			current:  -1 * time.Second,
+			max:      30 * time.Second,
+			expected: -2 * time.Second, // doubles even negative
+		},
+		{
+			name:     "small max",
+			current:  100 * time.Millisecond,
+			max:      150 * time.Millisecond,
+			expected: 150 * time.Millisecond,
+		},
+		{
+			name:     "equal values",
+			current:  10 * time.Second,
+			max:      10 * time.Second,
+			expected: 10 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := nextDelay(tt.current, tt.max)
+			if got != tt.expected {
+				t.Errorf("nextDelay(%v, %v) = %v, want %v", tt.current, tt.max, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDirListEntry_Fields(t *testing.T) {
+	entry := DirListEntry{
+		Name:       "testfile.txt",
+		Type:       "file",
+		Size:       1024,
+		Mode:       "-rw-r--r--",
+		ModTime:    "2024-01-15T10:30:00Z",
+		IsSymlink:  false,
+		LinkTarget: "",
+	}
+
+	if entry.Name != "testfile.txt" {
+		t.Errorf("Name = %q, want %q", entry.Name, "testfile.txt")
+	}
+	if entry.Type != "file" {
+		t.Errorf("Type = %q, want %q", entry.Type, "file")
+	}
+	if entry.Size != 1024 {
+		t.Errorf("Size = %d, want %d", entry.Size, 1024)
+	}
+}
+
+func TestDirListRequest_Fields(t *testing.T) {
+	req := DirListRequest{
+		ClientID:  "client-1",
+		RequestID: "req-1",
+		Mode:      "remote",
+		Path:      "/home/user",
+		Host:      "example.com",
+		User:      "testuser",
+		Port:      22,
+		Protocol:  "ssh",
+		Share:     "",
+		Profile:   "",
+	}
+
+	if req.Mode != "remote" {
+		t.Errorf("Mode = %q, want %q", req.Mode, "remote")
+	}
+	if req.Host != "example.com" {
+		t.Errorf("Host = %q, want %q", req.Host, "example.com")
+	}
+}
+
+func TestFilePutStartRequest_Fields(t *testing.T) {
+	req := FilePutStartRequest{
+		ClientID:  "client-1",
+		RequestID: "upload-1",
+		Path:      "/tmp/upload.txt",
+		Size:      2048,
+		Mode:      "0644",
+		Force:     true,
+		Overwrite: true,
+	}
+
+	if req.Size != 2048 {
+		t.Errorf("Size = %d, want %d", req.Size, 2048)
+	}
+	if !req.Force {
+		t.Error("Force should be true")
+	}
+	if !req.Overwrite {
+		t.Error("Overwrite should be true")
+	}
+}
+
+func TestFileDeleteRequest_Fields(t *testing.T) {
+	req := FileDeleteRequest{
+		ClientID:  "client-1",
+		RequestID: "delete-1",
+		Path:      "/tmp/todelete.txt",
+		Force:     false,
+		Recursive: true,
+	}
+
+	if req.Recursive != true {
+		t.Error("Recursive should be true")
+	}
+	if req.Force {
+		t.Error("Force should be false")
+	}
+}
+
+func TestFileChmodRequest_Fields(t *testing.T) {
+	req := FileChmodRequest{
+		ClientID:  "client-1",
+		RequestID: "chmod-1",
+		Path:      "/tmp/file.txt",
+		Mode:      "0755",
+		Force:     true,
+	}
+
+	if req.Mode != "0755" {
+		t.Errorf("Mode = %q, want %q", req.Mode, "0755")
+	}
+}

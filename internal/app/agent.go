@@ -19,6 +19,7 @@ import (
 	"github.com/austinkregel/compute-agent/pkg/backup"
 	"github.com/austinkregel/compute-agent/pkg/config"
 	"github.com/austinkregel/compute-agent/pkg/dirbrowse"
+	"github.com/austinkregel/compute-agent/pkg/fileops"
 	"github.com/austinkregel/compute-agent/pkg/logging"
 	"github.com/austinkregel/compute-agent/pkg/telemetry"
 	"github.com/austinkregel/compute-agent/pkg/transport"
@@ -73,6 +74,7 @@ type Agent struct {
 	telemetry *telemetry.Publisher
 	admin     *admin.Runner
 	backups   *backup.Coordinator
+	uploads   *fileops.UploadManager
 
 	ctx context.Context
 
@@ -86,6 +88,7 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		cfg:     cfg,
 		log:     log,
 		logTail: map[string]*tailHandle{},
+		uploads: fileops.NewUploadManager(),
 	}
 
 	// Best-effort cleanup of old Windows executables left after an update.
@@ -105,20 +108,25 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 	})
 
 	handlers := transport.Handlers{
-		Hello:        agent.handleHello,
-		AdminRun:     agent.handleAdminRun,
-		ShellStart:   agent.handleShellStart,
-		ShellInput:   agent.handleShellInput,
-		ShellResize:  agent.handleShellResize,
-		ShellClose:   agent.handleShellClose,
-		LogTailStart: agent.handleLogTailStart,
-		LogTailStop:  agent.handleLogTailStop,
-		BackupPlan:   agent.handleBackupPlan,
-		BackupStart:  agent.handleBackupStart,
-		SyncKeys:     agent.handleSyncKeys,
-		UpdateAgent:  agent.handleAgentUpdate,
-		CheckUpdates: agent.handleCheckUpdates,
-		DirList:      agent.handleDirListRequest,
+		Hello:         agent.handleHello,
+		AdminRun:      agent.handleAdminRun,
+		ShellStart:    agent.handleShellStart,
+		ShellInput:    agent.handleShellInput,
+		ShellResize:   agent.handleShellResize,
+		ShellClose:    agent.handleShellClose,
+		LogTailStart:  agent.handleLogTailStart,
+		LogTailStop:   agent.handleLogTailStop,
+		BackupPlan:    agent.handleBackupPlan,
+		BackupStart:   agent.handleBackupStart,
+		SyncKeys:      agent.handleSyncKeys,
+		UpdateAgent:   agent.handleAgentUpdate,
+		CheckUpdates:  agent.handleCheckUpdates,
+		DirList:       agent.handleDirListRequest,
+		FilePutStart:  agent.handleFilePutStart,
+		FilePutChunk:  agent.handleFilePutChunk,
+		FilePutFinish: agent.handleFilePutFinish,
+		FileDelete:    agent.handleFileDelete,
+		FileChmod:     agent.handleFileChmod,
 	}
 
 	t, err := transport.New(transport.Config{
@@ -406,7 +414,16 @@ func (a *Agent) buildDirListResponse(ctx context.Context, msg transport.DirListR
 
 	switch mode {
 	case "local":
-		clean, err := dirbrowse.ValidateAbsoluteDirPath(msg.Path)
+		pathToList := strings.TrimSpace(msg.Path)
+		// Default to home directory if no path provided
+		if pathToList == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				pathToList = home
+			} else {
+				pathToList = "/" // Fallback to root if home dir unavailable
+			}
+		}
+		clean, err := dirbrowse.ValidateAbsoluteDirPath(pathToList)
 		if err != nil {
 			resp.Error = err.Error()
 			return resp
@@ -434,6 +451,11 @@ func (a *Agent) buildDirListResponse(ctx context.Context, msg transport.DirListR
 		if proto == "" {
 			proto = "ssh"
 		}
+		// Default to root for remote paths if empty
+		remotePath := strings.TrimSpace(msg.Path)
+		if remotePath == "" {
+			remotePath = "/"
+		}
 
 		switch proto {
 		case "ssh":
@@ -441,7 +463,7 @@ func (a *Agent) buildDirListResponse(ctx context.Context, msg transport.DirListR
 				Host: msg.Host,
 				User: msg.User,
 				Port: msg.Port,
-				Path: msg.Path,
+				Path: remotePath,
 			}, dirbrowse.SSHOptions{
 				HostKeyPolicy: a.cfg.DirBrowse.SSHHostKeyPolicy,
 			})
@@ -474,7 +496,7 @@ func (a *Agent) buildDirListResponse(ctx context.Context, msg transport.DirListR
 				Host:    msg.Host,
 				Port:    msg.Port,
 				Share:   share,
-				Path:    msg.Path,
+				Path:    remotePath,
 				Profile: profile,
 			}, dirbrowse.SMBCredentials{
 				Username: p.Username,
@@ -504,12 +526,128 @@ func toTransportDirEntries(in []dirbrowse.Entry) []transport.DirListEntry {
 	out := make([]transport.DirListEntry, 0, len(in))
 	for _, e := range in {
 		out = append(out, transport.DirListEntry{
-			Name: e.Name,
-			Type: e.Type,
-			Size: e.Size,
+			Name:       e.Name,
+			Type:       e.Type,
+			Size:       e.Size,
+			Mode:       e.Mode,
+			ModTime:    e.ModTime,
+			IsSymlink:  e.IsSymlink,
+			LinkTarget: e.LinkTarget,
 		})
 	}
 	return out
+}
+
+// --- File operation handlers ---
+
+func (a *Agent) handleFilePutStart(msg transport.FilePutStartRequest) {
+	clientID := a.cfg.ClientID
+	result := transport.FilePutResult{
+		ClientID:  clientID,
+		RequestID: msg.RequestID,
+	}
+
+	err := a.uploads.StartUpload(msg.RequestID, msg.Path, msg.Size, msg.Mode, msg.Force, msg.Overwrite)
+	if err != nil {
+		result.OK = false
+		result.Error = err.Error()
+		a.log.Warn("file_put_start failed", "requestId", msg.RequestID, "path", msg.Path, "error", err)
+	} else {
+		result.OK = true
+		result.Path = msg.Path
+		a.log.Info("file_put_start accepted", "requestId", msg.RequestID, "path", msg.Path, "size", msg.Size)
+	}
+
+	if err := a.transport.Emit("file_put_result", result); err != nil {
+		a.log.Error("failed to emit file_put_result", "requestId", msg.RequestID, "error", err)
+	}
+}
+
+func (a *Agent) handleFilePutChunk(msg transport.FilePutChunk) {
+	err := a.uploads.WriteChunk(msg.RequestID, msg.Offset, msg.Data)
+	if err != nil {
+		a.log.Warn("file_put_chunk failed", "requestId", msg.RequestID, "offset", msg.Offset, "error", err)
+		// Cancel the upload on error
+		a.uploads.CancelUpload(msg.RequestID)
+		result := transport.FilePutResult{
+			ClientID:  a.cfg.ClientID,
+			RequestID: msg.RequestID,
+			OK:        false,
+			Error:     err.Error(),
+		}
+		_ = a.transport.Emit("file_put_result", result)
+	}
+}
+
+func (a *Agent) handleFilePutFinish(msg transport.FilePutFinishRequest) {
+	clientID := a.cfg.ClientID
+	result := transport.FilePutResult{
+		ClientID:  clientID,
+		RequestID: msg.RequestID,
+	}
+
+	path, size, err := a.uploads.FinishUpload(msg.RequestID, msg.Checksum)
+	if err != nil {
+		result.OK = false
+		result.Error = err.Error()
+		a.log.Warn("file_put_finish failed", "requestId", msg.RequestID, "error", err)
+	} else {
+		result.OK = true
+		result.Path = path
+		result.Size = size
+		a.log.Info("file_put_finish completed", "requestId", msg.RequestID, "path", path, "size", size)
+	}
+
+	if err := a.transport.Emit("file_put_result", result); err != nil {
+		a.log.Error("failed to emit file_put_result", "requestId", msg.RequestID, "error", err)
+	}
+}
+
+func (a *Agent) handleFileDelete(msg transport.FileDeleteRequest) {
+	clientID := a.cfg.ClientID
+	result := transport.FileDeleteResult{
+		ClientID:  clientID,
+		RequestID: msg.RequestID,
+		Path:      msg.Path,
+	}
+
+	err := fileops.DeleteFile(msg.Path, msg.Force, msg.Recursive)
+	if err != nil {
+		result.OK = false
+		result.Error = err.Error()
+		a.log.Warn("file_delete failed", "requestId", msg.RequestID, "path", msg.Path, "error", err)
+	} else {
+		result.OK = true
+		a.log.Info("file_delete completed", "requestId", msg.RequestID, "path", msg.Path)
+	}
+
+	if err := a.transport.Emit("file_delete_result", result); err != nil {
+		a.log.Error("failed to emit file_delete_result", "requestId", msg.RequestID, "error", err)
+	}
+}
+
+func (a *Agent) handleFileChmod(msg transport.FileChmodRequest) {
+	clientID := a.cfg.ClientID
+	result := transport.FileChmodResult{
+		ClientID:  clientID,
+		RequestID: msg.RequestID,
+	}
+
+	path, err := fileops.ChmodFile(msg.Path, msg.Mode, msg.Force)
+	if err != nil {
+		result.OK = false
+		result.Error = err.Error()
+		a.log.Warn("file_chmod failed", "requestId", msg.RequestID, "path", msg.Path, "mode", msg.Mode, "error", err)
+	} else {
+		result.OK = true
+		result.Path = path
+		result.Mode = msg.Mode
+		a.log.Info("file_chmod completed", "requestId", msg.RequestID, "path", path, "mode", msg.Mode)
+	}
+
+	if err := a.transport.Emit("file_chmod_result", result); err != nil {
+		a.log.Error("failed to emit file_chmod_result", "requestId", msg.RequestID, "error", err)
+	}
 }
 
 func (a *Agent) emitShellOutput(session string, data []byte) {

@@ -48,20 +48,25 @@ type Config struct {
 
 // Handlers capture callbacks for server-originated events.
 type Handlers struct {
-	Hello        func()
-	AdminRun     func(AdminCommand)
-	ShellStart   func(ShellStart)
-	ShellInput   func(ShellInput)
-	ShellResize  func(ShellResize)
-	ShellClose   func(ShellClose)
-	LogTailStart func(LogTailStart)
-	LogTailStop  func(LogTailStop)
-	BackupPlan   func(BackupRequest)
-	BackupStart  func(BackupRequest)
-	SyncKeys     func(SyncKeysRequest)
-	UpdateAgent  func(UpdateAgentRequest)
-	CheckUpdates func(CheckUpdatesRequest)
-	DirList      func(DirListRequest)
+	Hello         func()
+	AdminRun      func(AdminCommand)
+	ShellStart    func(ShellStart)
+	ShellInput    func(ShellInput)
+	ShellResize   func(ShellResize)
+	ShellClose    func(ShellClose)
+	LogTailStart  func(LogTailStart)
+	LogTailStop   func(LogTailStop)
+	BackupPlan    func(BackupRequest)
+	BackupStart   func(BackupRequest)
+	SyncKeys      func(SyncKeysRequest)
+	UpdateAgent   func(UpdateAgentRequest)
+	CheckUpdates  func(CheckUpdatesRequest)
+	DirList       func(DirListRequest)
+	FilePutStart  func(FilePutStartRequest)
+	FilePutChunk  func(FilePutChunk)
+	FilePutFinish func(FilePutFinishRequest)
+	FileDelete    func(FileDeleteRequest)
+	FileChmod     func(FileChmodRequest)
 }
 
 // AdminCommand mirrors the payload emitted by the control plane.
@@ -146,9 +151,13 @@ type DirListRequest struct {
 
 // DirListEntry describes a single child entry of a directory.
 type DirListEntry struct {
-	Name string `json:"name"`
-	Type string `json:"type"`           // "dir" or "file"
-	Size int64  `json:"size,omitempty"` // optional
+	Name       string `json:"name"`
+	Type       string `json:"type"`                  // "dir" or "file"
+	Size       int64  `json:"size,omitempty"`        // optional
+	Mode       string `json:"mode,omitempty"`        // Unix permission string, e.g., "drwxr-xr-x"
+	ModTime    string `json:"modTime,omitempty"`     // RFC3339 formatted modification time
+	IsSymlink  bool   `json:"isSymlink,omitempty"`   // true if entry is a symbolic link
+	LinkTarget string `json:"linkTarget,omitempty"` // target path if IsSymlink is true
 }
 
 // DirListResponse returns entries for a single directory request.
@@ -178,6 +187,79 @@ type UpdateAgentRequest struct {
 // Payload is optional; server may send an empty object.
 type CheckUpdatesRequest struct {
 	At string `json:"at,omitempty"`
+}
+
+// --- File Operations ---
+
+// FilePutStartRequest initiates a file upload to the agent.
+type FilePutStartRequest struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	Path      string `json:"path"`       // Absolute path where file should be written
+	Size      int64  `json:"size"`       // Expected total file size in bytes
+	Mode      string `json:"mode"`       // Optional permission mode, e.g., "0644"
+	Force     bool   `json:"force"`      // If true, allow writing to dangerous paths
+	Overwrite bool   `json:"overwrite"`  // If true, overwrite existing files
+}
+
+// FilePutChunk contains a chunk of file data.
+type FilePutChunk struct {
+	RequestID string `json:"requestId"`
+	Offset    int64  `json:"offset"` // Byte offset within the file
+	Data      []byte `json:"data"`   // Chunk data (base64 encoded in JSON)
+}
+
+// FilePutFinishRequest signals the end of a file upload.
+type FilePutFinishRequest struct {
+	RequestID string `json:"requestId"`
+	Checksum  string `json:"checksum,omitempty"` // Optional SHA256 checksum for verification
+}
+
+// FilePutResult is the agent's response to a file upload.
+type FilePutResult struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	OK        bool   `json:"ok"`
+	Path      string `json:"path,omitempty"`
+	Size      int64  `json:"size,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// FileDeleteRequest asks the agent to delete a file or empty directory.
+type FileDeleteRequest struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	Path      string `json:"path"`
+	Force     bool   `json:"force"`     // If true, allow deleting in dangerous paths
+	Recursive bool   `json:"recursive"` // If true, allow deleting non-empty directories (requires force)
+}
+
+// FileDeleteResult is the agent's response to a delete request.
+type FileDeleteResult struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	OK        bool   `json:"ok"`
+	Path      string `json:"path,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// FileChmodRequest asks the agent to change file permissions.
+type FileChmodRequest struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	Path      string `json:"path"`
+	Mode      string `json:"mode"`  // Permission mode, e.g., "0755" or "rwxr-xr-x"
+	Force     bool   `json:"force"` // If true, allow chmod in dangerous paths
+}
+
+// FileChmodResult is the agent's response to a chmod request.
+type FileChmodResult struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	OK        bool   `json:"ok"`
+	Path      string `json:"path,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // Client maintains the socket.io/WebSocket session to the control plane.
@@ -472,6 +554,47 @@ func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
 		c.log.Debug("recv event", "event", "dir_list_request")
 		if c.handlers.DirList != nil {
 			c.handlers.DirList(msg)
+		}
+	})
+
+	// File operations
+	socket.OnEvent("file_put_start", func(msg FilePutStartRequest) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "file_put_start", "requestId", msg.RequestID, "path", msg.Path)
+		if c.handlers.FilePutStart != nil {
+			c.handlers.FilePutStart(msg)
+		}
+	})
+
+	socket.OnEvent("file_put_chunk", func(msg FilePutChunk) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "file_put_chunk", "requestId", msg.RequestID, "offset", msg.Offset, "dataLen", len(msg.Data))
+		if c.handlers.FilePutChunk != nil {
+			c.handlers.FilePutChunk(msg)
+		}
+	})
+
+	socket.OnEvent("file_put_finish", func(msg FilePutFinishRequest) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "file_put_finish", "requestId", msg.RequestID)
+		if c.handlers.FilePutFinish != nil {
+			c.handlers.FilePutFinish(msg)
+		}
+	})
+
+	socket.OnEvent("file_delete_request", func(msg FileDeleteRequest) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "file_delete_request", "requestId", msg.RequestID, "path", msg.Path)
+		if c.handlers.FileDelete != nil {
+			c.handlers.FileDelete(msg)
+		}
+	})
+
+	socket.OnEvent("file_chmod_request", func(msg FileChmodRequest) {
+		c.touchTraffic()
+		c.log.Debug("recv event", "event", "file_chmod_request", "requestId", msg.RequestID, "path", msg.Path, "mode", msg.Mode)
+		if c.handlers.FileChmod != nil {
+			c.handlers.FileChmod(msg)
 		}
 	})
 }

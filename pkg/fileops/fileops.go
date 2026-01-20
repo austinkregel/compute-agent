@@ -1,0 +1,434 @@
+// Package fileops provides secure file operations (write, delete, chmod) with
+// path validation and policy enforcement.
+package fileops
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+)
+
+// --- Path validation errors ---
+
+var (
+	ErrEmptyPath        = errors.New("path is required")
+	ErrNotAbsolute      = errors.New("path must be absolute")
+	ErrContainsNUL      = errors.New("path contains NUL byte")
+	ErrPathTraversal    = errors.New("path contains traversal segment '..'")
+	ErrHardDeny         = errors.New("operation denied: path is in a protected system directory")
+	ErrDangerousPath    = errors.New("operation requires force=true for this path")
+	ErrDeleteRoot       = errors.New("cannot delete root directory")
+	ErrDeleteNonEmpty   = errors.New("cannot delete non-empty directory without recursive=true")
+	ErrChmodWindows     = errors.New("chmod is not supported on Windows")
+	ErrInvalidMode      = errors.New("invalid permission mode")
+	ErrUploadInProgress = errors.New("upload already in progress for this request")
+	ErrUploadNotFound   = errors.New("no upload in progress for this request")
+	ErrChecksumMismatch = errors.New("checksum mismatch")
+)
+
+// --- Path policy ---
+
+// Hard deny prefixes: operations on these paths are ALWAYS blocked.
+var hardDenyPrefixes = []string{
+	"/dev",
+	"/proc",
+	"/sys",
+	"/run",
+}
+
+// Dangerous prefixes: operations require force=true.
+var dangerousPrefixes = []string{
+	"/bin",
+	"/sbin",
+	"/usr",
+	"/lib",
+	"/lib32",
+	"/lib64",
+	"/libx32",
+	"/boot",
+	"/snap",
+	"/var/lib",
+	"/var/cache",
+}
+
+// Windows equivalents
+var windowsHardDenyPrefixes = []string{
+	`\\.\`,       // Device namespace
+	`\\?\Volume`, // Volume GUIDs
+}
+
+var windowsDangerousPrefixes = []string{
+	`C:\Windows`,
+	`C:\Program Files`,
+	`C:\Program Files (x86)`,
+}
+
+// ValidatePath checks that a path is safe for file operations.
+// It returns the cleaned absolute path on success.
+func ValidatePath(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "", ErrEmptyPath
+	}
+	if strings.ContainsRune(p, '\x00') {
+		return "", ErrContainsNUL
+	}
+	if containsDotDotSegment(p) {
+		return "", ErrPathTraversal
+	}
+	clean := filepath.Clean(p)
+	if !filepath.IsAbs(clean) {
+		return "", ErrNotAbsolute
+	}
+	return clean, nil
+}
+
+func containsDotDotSegment(p string) bool {
+	isSep := func(r rune) bool { return r == '/' || r == '\\' }
+	segStart := 0
+	runes := []rune(p)
+	for i := 0; i <= len(runes); i++ {
+		if i == len(runes) || isSep(runes[i]) {
+			seg := string(runes[segStart:i])
+			if seg == ".." {
+				return true
+			}
+			segStart = i + 1
+		}
+	}
+	return false
+}
+
+// CheckPathPolicy validates a path against the security policy.
+// Returns nil if allowed, ErrHardDeny if blocked, ErrDangerousPath if force is required.
+func CheckPathPolicy(absPath string, force bool) error {
+	lower := strings.ToLower(absPath)
+
+	// Hard deny checks
+	denyPrefixes := hardDenyPrefixes
+	if runtime.GOOS == "windows" {
+		denyPrefixes = windowsHardDenyPrefixes
+	}
+	for _, prefix := range denyPrefixes {
+		prefixLower := strings.ToLower(prefix)
+		if strings.HasPrefix(lower, prefixLower) || lower == prefixLower {
+			return ErrHardDeny
+		}
+	}
+
+	// Dangerous path checks (require force=true)
+	dangerPrefixes := dangerousPrefixes
+	if runtime.GOOS == "windows" {
+		dangerPrefixes = windowsDangerousPrefixes
+	}
+	for _, prefix := range dangerPrefixes {
+		prefixLower := strings.ToLower(prefix)
+		if strings.HasPrefix(lower, prefixLower) || lower == prefixLower {
+			if !force {
+				return ErrDangerousPath
+			}
+			// force=true, allow but continue to check for hard deny
+		}
+	}
+
+	return nil
+}
+
+// --- Upload session management ---
+
+// UploadSession tracks an in-progress file upload.
+type UploadSession struct {
+	Path         string
+	ExpectedSize int64
+	Mode         os.FileMode
+	TempPath     string
+	File         *os.File
+	BytesWritten int64
+	mu           sync.Mutex
+}
+
+// UploadManager manages concurrent upload sessions.
+type UploadManager struct {
+	sessions map[string]*UploadSession
+	mu       sync.Mutex
+}
+
+// NewUploadManager creates a new upload manager.
+func NewUploadManager() *UploadManager {
+	return &UploadManager{
+		sessions: make(map[string]*UploadSession),
+	}
+}
+
+// StartUpload begins a new upload session.
+func (m *UploadManager) StartUpload(requestID, path string, size int64, modeStr string, force, overwrite bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.sessions[requestID]; exists {
+		return ErrUploadInProgress
+	}
+
+	// Validate and check policy
+	absPath, err := ValidatePath(path)
+	if err != nil {
+		return err
+	}
+	if err := CheckPathPolicy(absPath, force); err != nil {
+		return err
+	}
+
+	// Check if file exists and overwrite is not set
+	if _, err := os.Stat(absPath); err == nil && !overwrite {
+		return fmt.Errorf("file exists and overwrite=false: %s", absPath)
+	}
+
+	// Parse mode
+	mode := os.FileMode(0644)
+	if modeStr != "" {
+		parsed, err := parseMode(modeStr)
+		if err != nil {
+			return err
+		}
+		mode = parsed
+	}
+
+	// Ensure parent directory exists
+	dir := filepath.Dir(absPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create parent directory: %w", err)
+	}
+
+	// Create temp file in the same directory for atomic rename
+	tempFile, err := os.CreateTemp(dir, ".upload-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+
+	session := &UploadSession{
+		Path:         absPath,
+		ExpectedSize: size,
+		Mode:         mode,
+		TempPath:     tempFile.Name(),
+		File:         tempFile,
+		BytesWritten: 0,
+	}
+	m.sessions[requestID] = session
+	return nil
+}
+
+// WriteChunk writes a chunk to an upload session.
+func (m *UploadManager) WriteChunk(requestID string, offset int64, data []byte) error {
+	m.mu.Lock()
+	session, exists := m.sessions[requestID]
+	m.mu.Unlock()
+
+	if !exists {
+		return ErrUploadNotFound
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	// Seek to offset
+	if _, err := session.File.Seek(offset, io.SeekStart); err != nil {
+		return fmt.Errorf("seek: %w", err)
+	}
+
+	// Write data
+	n, err := session.File.Write(data)
+	if err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	session.BytesWritten += int64(n)
+
+	return nil
+}
+
+// FinishUpload completes an upload and atomically moves the file to its final location.
+func (m *UploadManager) FinishUpload(requestID, checksum string) (string, int64, error) {
+	m.mu.Lock()
+	session, exists := m.sessions[requestID]
+	if exists {
+		delete(m.sessions, requestID)
+	}
+	m.mu.Unlock()
+
+	if !exists {
+		return "", 0, ErrUploadNotFound
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	// Sync and close the temp file
+	if err := session.File.Sync(); err != nil {
+		session.File.Close()
+		os.Remove(session.TempPath)
+		return "", 0, fmt.Errorf("sync: %w", err)
+	}
+
+	// Verify checksum if provided
+	if checksum != "" {
+		if _, err := session.File.Seek(0, io.SeekStart); err != nil {
+			session.File.Close()
+			os.Remove(session.TempPath)
+			return "", 0, fmt.Errorf("seek for checksum: %w", err)
+		}
+		hash := sha256.New()
+		if _, err := io.Copy(hash, session.File); err != nil {
+			session.File.Close()
+			os.Remove(session.TempPath)
+			return "", 0, fmt.Errorf("checksum read: %w", err)
+		}
+		computed := hex.EncodeToString(hash.Sum(nil))
+		if !strings.EqualFold(computed, checksum) {
+			session.File.Close()
+			os.Remove(session.TempPath)
+			return "", 0, ErrChecksumMismatch
+		}
+	}
+
+	session.File.Close()
+
+	// Set permissions before rename
+	if err := os.Chmod(session.TempPath, session.Mode); err != nil {
+		os.Remove(session.TempPath)
+		return "", 0, fmt.Errorf("chmod: %w", err)
+	}
+
+	// Atomic rename
+	if err := os.Rename(session.TempPath, session.Path); err != nil {
+		// On Windows, rename over existing file may fail; try remove+rename
+		if runtime.GOOS == "windows" {
+			os.Remove(session.Path)
+			if err2 := os.Rename(session.TempPath, session.Path); err2 != nil {
+				os.Remove(session.TempPath)
+				return "", 0, fmt.Errorf("rename: %w", err)
+			}
+		} else {
+			os.Remove(session.TempPath)
+			return "", 0, fmt.Errorf("rename: %w", err)
+		}
+	}
+
+	return session.Path, session.BytesWritten, nil
+}
+
+// CancelUpload aborts an upload and cleans up.
+func (m *UploadManager) CancelUpload(requestID string) {
+	m.mu.Lock()
+	session, exists := m.sessions[requestID]
+	if exists {
+		delete(m.sessions, requestID)
+	}
+	m.mu.Unlock()
+
+	if exists {
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		session.File.Close()
+		os.Remove(session.TempPath)
+	}
+}
+
+// --- Delete operation ---
+
+// DeleteFile deletes a file or empty directory.
+func DeleteFile(path string, force, recursive bool) error {
+	absPath, err := ValidatePath(path)
+	if err != nil {
+		return err
+	}
+
+	// Prevent deleting root
+	if absPath == "/" || absPath == `C:\` || absPath == `C:` {
+		return ErrDeleteRoot
+	}
+
+	if err := CheckPathPolicy(absPath, force); err != nil {
+		return err
+	}
+
+	info, err := os.Lstat(absPath)
+	if err != nil {
+		return err
+	}
+
+	if info.IsDir() {
+		if recursive {
+			// Recursive delete requires force for safety
+			if !force {
+				return errors.New("recursive delete requires force=true")
+			}
+			return os.RemoveAll(absPath)
+		}
+		// Try to remove as empty directory
+		if err := os.Remove(absPath); err != nil {
+			// Check if it's a non-empty directory error
+			if os.IsExist(err) || strings.Contains(err.Error(), "not empty") || strings.Contains(err.Error(), "directory not empty") {
+				return ErrDeleteNonEmpty
+			}
+			return err
+		}
+		return nil
+	}
+
+	// Regular file or symlink
+	return os.Remove(absPath)
+}
+
+// --- Chmod operation ---
+
+// ChmodFile changes the permissions of a file.
+func ChmodFile(path, modeStr string, force bool) (string, error) {
+	if runtime.GOOS == "windows" {
+		return "", ErrChmodWindows
+	}
+
+	absPath, err := ValidatePath(path)
+	if err != nil {
+		return "", err
+	}
+
+	if err := CheckPathPolicy(absPath, force); err != nil {
+		return "", err
+	}
+
+	mode, err := parseMode(modeStr)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.Chmod(absPath, mode); err != nil {
+		return "", err
+	}
+
+	return absPath, nil
+}
+
+// parseMode parses a permission mode string (octal like "0755" or "755").
+func parseMode(s string) (os.FileMode, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, ErrInvalidMode
+	}
+
+	// Handle octal format (0755, 755, etc.)
+	val, err := strconv.ParseUint(s, 8, 32)
+	if err != nil {
+		return 0, ErrInvalidMode
+	}
+	if val > 0777 {
+		return 0, ErrInvalidMode
+	}
+	return os.FileMode(val), nil
+}

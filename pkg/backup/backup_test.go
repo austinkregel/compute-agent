@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -601,6 +602,380 @@ func TestMaxHelpers(t *testing.T) {
 	}
 	if got := max64(5, 2); got != 5 {
 		t.Fatalf("max64(5,2)=%d want 5", got)
+	}
+}
+
+func TestSanitizePlanID(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"plan-123", "plan-123"},
+		{"plan_456", "plan_456"},
+		{"plan.789", "plan.789"},
+		{"Plan-ABC", "Plan-ABC"},
+		{"plan with spaces", "plan_with_spaces"},
+		{"plan/with/slashes", "plan_with_slashes"},
+		{"plan:with:colons", "plan_with_colons"},
+		{"", "unknown"},
+		{"   ", "unknown"},
+		// The regex replaces consecutive non-allowed chars with a single underscore
+		{"plan<>|?*", "plan_"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := sanitizePlanID(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizePlanID(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSafeJoin(t *testing.T) {
+	tmp := t.TempDir()
+
+	tests := []struct {
+		name     string
+		destRoot string
+		relative string
+		wantErr  bool
+	}{
+		{"simple relative", tmp, "file.txt", false},
+		{"nested relative", tmp, "subdir/file.txt", false},
+		{"traversal blocked", tmp, "../outside.txt", true},
+		{"absolute path blocked", tmp, "/etc/passwd", true},
+		{"double traversal", tmp, "sub/../../../etc", true},
+		{"empty relative", tmp, "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := safeJoin(tt.destRoot, tt.relative)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("safeJoin(%q, %q) error = %v, wantErr %v", tt.destRoot, tt.relative, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestIsWithin(t *testing.T) {
+	tests := []struct {
+		name   string
+		root   string
+		target string
+		want   bool
+	}{
+		{"same path", "/tmp", "/tmp", true},
+		{"child path", "/tmp", "/tmp/subdir", true},
+		{"deep child", "/tmp", "/tmp/a/b/c/d", true},
+		{"sibling path", "/tmp", "/var", false},
+		{"parent path", "/tmp/subdir", "/tmp", false},
+		{"traversal escape", "/tmp", "/tmp/../etc", false},
+		{"root", "/", "/any/path", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isWithin(tt.root, tt.target)
+			if got != tt.want {
+				t.Errorf("isWithin(%q, %q) = %v, want %v", tt.root, tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchesAny(t *testing.T) {
+	tests := []struct {
+		path  string
+		globs []string
+		want  bool
+	}{
+		{"path/to/file.log", []string{"**/*.log"}, true},
+		{"path/to/file.txt", []string{"**/*.log"}, false},
+		{"node_modules/pkg/index.js", []string{"**/node_modules/**"}, true},
+		{"src/app.js", []string{"**/node_modules/**"}, false},
+		{"path/to/file.txt", []string{}, false},
+		{".git/config", []string{"**/.git/**"}, true},
+		{"file.txt", []string{"*.txt"}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			globs := normalizeGlobs(tt.globs)
+			got := matchesAny(tt.path, globs)
+			if got != tt.want {
+				t.Errorf("matchesAny(%q, %v) = %v, want %v", tt.path, tt.globs, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCopyFileWithProgress(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "source.txt")
+	dest := filepath.Join(tmp, "dest.txt")
+	content := []byte("Hello, this is test content for copying!")
+
+	if err := os.WriteFile(src, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var progressCalls int
+	var lastCopied int64
+	var lastDone bool
+
+	err := copyFileWithProgress(context.Background(), src, dest, func(copied int64, done bool) {
+		progressCalls++
+		lastCopied = copied
+		lastDone = done
+	})
+	if err != nil {
+		t.Fatalf("copyFileWithProgress error: %v", err)
+	}
+
+	if progressCalls == 0 {
+		t.Error("expected progress callback to be called")
+	}
+	if lastCopied != int64(len(content)) {
+		t.Errorf("final copied = %d, want %d", lastCopied, len(content))
+	}
+	if !lastDone {
+		t.Error("expected final callback to have done=true")
+	}
+
+	// Verify file content
+	gotContent, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotContent) != string(content) {
+		t.Errorf("content mismatch")
+	}
+}
+
+func TestCopyFileWithProgress_ContextCancellation(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "source.txt")
+	dest := filepath.Join(tmp, "dest.txt")
+
+	// Create a larger file
+	content := make([]byte, 100*1024) // 100KB
+	for i := range content {
+		content[i] = byte(i % 256)
+	}
+	if err := os.WriteFile(src, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	err := copyFileWithProgress(ctx, src, dest, nil)
+	if err == nil {
+		t.Error("expected error from cancelled context")
+	}
+}
+
+func TestPersistAndLoadPlan(t *testing.T) {
+	log, _ := logging.New(logging.Options{Level: "error"})
+	coord := NewCoordinator(&config.Config{}, log, noopEmitter{})
+
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "src")
+	dest := filepath.Join(tmp, "dest")
+	os.Mkdir(src, 0o755)
+	os.WriteFile(filepath.Join(src, "file.txt"), []byte("content"), 0o644)
+
+	req := transport.BackupRequest{
+		PlanID:     "test-plan-persist",
+		SourceDirs: []string{src},
+		DestRoot:   dest,
+	}
+
+	rec, err := coord.generatePlan(context.Background(), req)
+	if err != nil {
+		t.Fatalf("generatePlan: %v", err)
+	}
+
+	// Persist the plan
+	if err := coord.persistPlan(req.PlanID, rec); err != nil {
+		t.Fatalf("persistPlan: %v", err)
+	}
+
+	// Load the plan
+	loaded, err := coord.loadPlan(req.PlanID)
+	if err != nil {
+		t.Fatalf("loadPlan: %v", err)
+	}
+
+	if loaded.TotalFiles != rec.TotalFiles {
+		t.Errorf("TotalFiles mismatch: got %d, want %d", loaded.TotalFiles, rec.TotalFiles)
+	}
+	if loaded.TotalBytes != rec.TotalBytes {
+		t.Errorf("TotalBytes mismatch: got %d, want %d", loaded.TotalBytes, rec.TotalBytes)
+	}
+}
+
+func TestPersistProgress(t *testing.T) {
+	log, _ := logging.New(logging.Options{Level: "error"})
+	coord := NewCoordinator(&config.Config{}, log, noopEmitter{})
+
+	planID := "test-plan-progress"
+	err := coord.persistProgress(planID, "current_file.txt", 12345)
+	if err != nil {
+		t.Fatalf("persistProgress: %v", err)
+	}
+
+	// Verify the progress file was created
+	progressPath := coord.progressFilePath(planID)
+	if _, err := os.Stat(progressPath); os.IsNotExist(err) {
+		t.Error("progress file was not created")
+	}
+}
+
+func TestAtomicWriteFile(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "atomic.txt")
+	content := []byte("atomic content")
+
+	err := atomicWriteFile(path, content, 0o600)
+	if err != nil {
+		t.Fatalf("atomicWriteFile: %v", err)
+	}
+
+	// Verify content
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// atomicWriteFile adds a newline
+	if string(got) != string(content)+"\n" {
+		t.Errorf("content = %q, want %q", string(got), string(content)+"\n")
+	}
+
+	// Verify permissions
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("permissions = %o, want %o", info.Mode().Perm(), 0o600)
+	}
+}
+
+func TestValidateSourceDir_AllowedRoots(t *testing.T) {
+	tmp := t.TempDir()
+	allowed := filepath.Join(tmp, "allowed")
+	forbidden := filepath.Join(tmp, "forbidden")
+	os.Mkdir(allowed, 0o755)
+	os.Mkdir(forbidden, 0o755)
+
+	log, _ := logging.New(logging.Options{Level: "error"})
+	coord := NewCoordinator(&config.Config{
+		Backup: config.BackupConfig{
+			AllowedSourceRoots: []string{allowed},
+		},
+	}, log, noopEmitter{})
+
+	// Allowed path should pass
+	_, err := coord.validateSourceDir(allowed)
+	if err != nil {
+		t.Errorf("validateSourceDir for allowed path: %v", err)
+	}
+
+	// Forbidden path should fail
+	_, err = coord.validateSourceDir(forbidden)
+	if err == nil {
+		t.Error("expected error for forbidden path")
+	}
+}
+
+func TestIsAllowedDestRoot(t *testing.T) {
+	tmp := t.TempDir()
+	allowed := filepath.Join(tmp, "allowed")
+	forbidden := filepath.Join(tmp, "forbidden")
+	os.Mkdir(allowed, 0o755)
+	os.Mkdir(forbidden, 0o755)
+
+	log, _ := logging.New(logging.Options{Level: "error"})
+	coord := NewCoordinator(&config.Config{
+		Backup: config.BackupConfig{
+			AllowedDestRoots: []string{allowed},
+		},
+	}, log, noopEmitter{})
+
+	if !coord.isAllowedDestRoot(allowed) {
+		t.Error("expected allowed dest root to be accepted")
+	}
+	if !coord.isAllowedDestRoot(filepath.Join(allowed, "subdir")) {
+		t.Error("expected child of allowed dest root to be accepted")
+	}
+	if coord.isAllowedDestRoot(forbidden) {
+		t.Error("expected forbidden dest root to be rejected")
+	}
+}
+
+func TestIsAllowedDestRoot_NoConfig(t *testing.T) {
+	log, _ := logging.New(logging.Options{Level: "error"})
+
+	// With nil config
+	coord := NewCoordinator(nil, log, noopEmitter{})
+	if !coord.isAllowedDestRoot("/any/path") {
+		t.Error("expected any path to be allowed when no config")
+	}
+
+	// With empty allowlist
+	coord2 := NewCoordinator(&config.Config{}, log, noopEmitter{})
+	if !coord2.isAllowedDestRoot("/any/path") {
+		t.Error("expected any path to be allowed when allowlist empty")
+	}
+}
+
+func TestEmitError(t *testing.T) {
+	var emittedEvent string
+	var emittedPayload map[string]any
+
+	emitter := &testEmitter{
+		emitFunc: func(event string, payload any) error {
+			emittedEvent = event
+			if m, ok := payload.(map[string]any); ok {
+				emittedPayload = m
+			}
+			return nil
+		},
+	}
+
+	log, _ := logging.New(logging.Options{Level: "error"})
+	coord := NewCoordinator(&config.Config{}, log, emitter)
+
+	testErr := errors.New("test error")
+	coord.emitError("plan-123", testErr)
+
+	if emittedEvent != "backup_error" {
+		t.Errorf("expected 'backup_error' event, got %q", emittedEvent)
+	}
+	if emittedPayload["planId"] != "plan-123" {
+		t.Errorf("expected planId 'plan-123', got %v", emittedPayload["planId"])
+	}
+	if emittedPayload["error"] != "test error" {
+		t.Errorf("expected error 'test error', got %v", emittedPayload["error"])
+	}
+}
+
+func TestGeneratePlan_EmptySourceDir(t *testing.T) {
+	log, _ := logging.New(logging.Options{Level: "error"})
+	coord := NewCoordinator(&config.Config{}, log, noopEmitter{})
+	req := transport.BackupRequest{
+		PlanID:     "plan-1",
+		SourceDirs: []string{"", "   "},
+		DestRoot:   "/dest",
+	}
+
+	_, err := coord.generatePlan(context.Background(), req)
+	if err == nil {
+		t.Error("expected error for empty source dirs")
 	}
 }
 

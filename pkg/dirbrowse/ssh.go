@@ -132,18 +132,47 @@ func ListSSH(ctx context.Context, req SSHRequest, opt SSHOptions) (Result, error
 		}
 		typ := "file"
 		size := int64(0)
+		modeStr := fi.Mode().String()
+		modTime := fi.ModTime().UTC().Format("2006-01-02T15:04:05Z07:00")
+		isSymlink := fi.Mode()&os.ModeSymlink != 0
+
 		if fi.IsDir() {
 			typ = "dir"
 		} else {
 			size = fi.Size()
 		}
-		approxBytes += len(name) + 16
+
+		// For symlinks over SFTP, try to read the target
+		var linkTarget string
+		if isSymlink {
+			fullPath := path.Join(remotePath, name)
+			if target, err := sftpClient.ReadLink(fullPath); err == nil {
+				linkTarget = target
+			}
+			// Try to follow symlink for type determination
+			if targetInfo, err := sftpClient.Stat(fullPath); err == nil {
+				if targetInfo.IsDir() {
+					typ = "dir"
+				}
+				size = targetInfo.Size()
+			}
+		}
+
+		approxBytes += len(name) + 64
 		if len(out) >= maxEntries || approxBytes > maxBytes {
 			truncated = true
 			truncReason = "listing truncated due to size limits"
 			break
 		}
-		out = append(out, Entry{Name: name, Type: typ, Size: size})
+		out = append(out, Entry{
+			Name:       name,
+			Type:       typ,
+			Size:       size,
+			Mode:       modeStr,
+			ModTime:    modTime,
+			IsSymlink:  isSymlink,
+			LinkTarget: linkTarget,
+		})
 	}
 
 	sortEntries(out)

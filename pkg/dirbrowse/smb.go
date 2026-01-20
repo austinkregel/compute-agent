@@ -127,18 +127,31 @@ func ListSMB(ctx context.Context, req SMBRequest, cred SMBCredentials, opt SMBOp
 		}
 		typ := "file"
 		size := int64(0)
+		modeStr := fi.Mode().String()
+		modTime := fi.ModTime().UTC().Format("2006-01-02T15:04:05Z07:00")
+		// SMB doesn't have native symlink support in the same way, so we don't set IsSymlink
+
 		if fi.IsDir() {
 			typ = "dir"
 		} else {
 			size = fi.Size()
 		}
-		approxBytes += len(name) + 16
+
+		approxBytes += len(name) + 64
 		if len(out) >= maxEntries || approxBytes > maxBytes {
 			truncated = true
 			truncReason = "listing truncated due to size limits"
 			break
 		}
-		out = append(out, Entry{Name: name, Type: typ, Size: size})
+		out = append(out, Entry{
+			Name:       name,
+			Type:       typ,
+			Size:       size,
+			Mode:       modeStr,
+			ModTime:    modTime,
+			IsSymlink:  false,
+			LinkTarget: "",
+		})
 	}
 
 	sortEntries(out)

@@ -13,9 +13,13 @@ import (
 // Entry is a single directory child entry.
 // Type is either "dir" or "file".
 type Entry struct {
-	Name string
-	Type string
-	Size int64
+	Name       string
+	Type       string
+	Size       int64
+	Mode       string // Unix permission string, e.g., "drwxr-xr-x" or octal "0755"
+	ModTime    string // RFC3339 formatted modification time
+	IsSymlink  bool
+	LinkTarget string // Target path if IsSymlink is true
 }
 
 // Result is a listing result that may include a truncation warning.
@@ -141,26 +145,70 @@ func ListLocal(ctx context.Context, absPath string, maxEntries int, maxResponseB
 		}
 		typ := "file"
 		size := int64(0)
+		var modeStr string
+		var modTime string
+		var isSymlink bool
+		var linkTarget string
 
-		info, infoErr := e.Info()
-		if infoErr == nil {
-			if info.IsDir() {
+		// Use Lstat to detect symlinks properly
+		fullPath := filepath.Join(absPath, name)
+		lstatInfo, lstatErr := os.Lstat(fullPath)
+		if lstatErr == nil {
+			isSymlink = lstatInfo.Mode()&os.ModeSymlink != 0
+			modeStr = lstatInfo.Mode().String()
+			modTime = lstatInfo.ModTime().UTC().Format("2006-01-02T15:04:05Z07:00")
+
+			if isSymlink {
+				// Try to read the symlink target
+				if target, err := os.Readlink(fullPath); err == nil {
+					linkTarget = target
+				}
+				// For type, follow the symlink to determine if it's a dir or file
+				if targetInfo, err := os.Stat(fullPath); err == nil {
+					if targetInfo.IsDir() {
+						typ = "dir"
+					}
+					size = targetInfo.Size()
+				}
+			} else {
+				if lstatInfo.IsDir() {
+					typ = "dir"
+				} else {
+					size = lstatInfo.Size()
+				}
+			}
+		} else {
+			// Fallback to e.Info() if Lstat fails
+			info, infoErr := e.Info()
+			if infoErr == nil {
+				if info.IsDir() {
+					typ = "dir"
+				}
+				if !info.IsDir() {
+					size = info.Size()
+				}
+				modeStr = info.Mode().String()
+				modTime = info.ModTime().UTC().Format("2006-01-02T15:04:05Z07:00")
+			} else if e.IsDir() {
 				typ = "dir"
 			}
-			if !info.IsDir() {
-				size = info.Size()
-			}
-		} else if e.IsDir() {
-			typ = "dir"
 		}
 
-		approxBytes += len(name) + 16 // name + overhead
+		approxBytes += len(name) + 64 // name + overhead for metadata
 		if len(out) >= maxEntries || approxBytes > maxResponseBytes {
 			truncated = true
 			truncReason = "listing truncated due to size limits"
 			break
 		}
-		out = append(out, Entry{Name: name, Type: typ, Size: size})
+		out = append(out, Entry{
+			Name:       name,
+			Type:       typ,
+			Size:       size,
+			Mode:       modeStr,
+			ModTime:    modTime,
+			IsSymlink:  isSymlink,
+			LinkTarget: linkTarget,
+		})
 	}
 
 	sortEntries(out)
