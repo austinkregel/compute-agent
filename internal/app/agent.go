@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/austinkregel/compute-agent/internal/kiosk"
 	"github.com/austinkregel/compute-agent/pkg/admin"
 	"github.com/austinkregel/compute-agent/pkg/backup"
 	"github.com/austinkregel/compute-agent/pkg/config"
@@ -75,6 +76,7 @@ type Agent struct {
 	admin     *admin.Runner
 	backups   *backup.Coordinator
 	uploads   *fileops.UploadManager
+	kiosk     kiosk.Manager
 
 	ctx context.Context
 
@@ -127,6 +129,7 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		FilePutFinish: agent.handleFilePutFinish,
 		FileDelete:    agent.handleFileDelete,
 		FileChmod:     agent.handleFileChmod,
+		KioskSet:      agent.handleKioskSet,
 	}
 
 	t, err := transport.New(transport.Config{
@@ -153,6 +156,19 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 	agent.telemetry = pub
 	agent.admin = adminRunner
 	agent.backups = backupCoord
+
+	// Initialize kiosk subsystem if enabled
+	if cfg.Kiosk.Enabled {
+		kioskMgr, err := kiosk.New(kiosk.Config{
+			ListenAddr: cfg.Kiosk.ListenAddr,
+			Fullscreen: cfg.Kiosk.Fullscreen,
+		}, log.With("component", "kiosk"), agent.handleKioskStatus)
+		if err != nil {
+			return nil, fmt.Errorf("kiosk: %w", err)
+		}
+		agent.kiosk = kioskMgr
+	}
+
 	return agent, nil
 }
 
@@ -162,10 +178,20 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer cancel()
 	a.ctx = ctx
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 
 	go func() { errCh <- a.transport.Run(ctx) }()
 	go func() { errCh <- a.telemetry.Run(ctx) }()
+
+	// Start kiosk subsystem if enabled
+	if a.kiosk != nil {
+		go func() {
+			if err := a.kiosk.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				a.log.Error("kiosk subsystem error", "error", err)
+				errCh <- err
+			}
+		}()
+	}
 
 	select {
 	case err := <-errCh:
@@ -820,4 +846,53 @@ func writeAuthorizedKeysAtomically(path string, lines []string) error {
 	}
 	_ = os.Chmod(path, 0o600)
 	return nil
+}
+
+// --- Kiosk handlers ---
+
+func (a *Agent) handleKioskSet(msg transport.KioskSetRequest) {
+	if a.kiosk == nil {
+		a.log.Warn("kiosk_set received but kiosk not enabled")
+		a.emitKioskStatus(kiosk.NewStatus(false, false, kiosk.Content{Kind: "blank"}, "kiosk not enabled"))
+		return
+	}
+
+	content := kiosk.Content{
+		Kind:  msg.Content.Kind,
+		Title: msg.Content.Title,
+		Text:  msg.Content.Text,
+		URL:   msg.Content.URL,
+	}
+
+	if err := a.kiosk.SetContent(content); err != nil {
+		a.log.Error("kiosk set content failed", "error", err, "kind", content.Kind)
+		// Status will be emitted by the kiosk subsystem with the error
+		return
+	}
+
+	a.log.Info("kiosk content updated", "kind", content.Kind, "requestId", msg.RequestID)
+}
+
+func (a *Agent) handleKioskStatus(status kiosk.Status) {
+	a.emitKioskStatus(status)
+}
+
+func (a *Agent) emitKioskStatus(status kiosk.Status) {
+	payload := map[string]any{
+		"kiosk": map[string]any{
+			"running":   status.Running,
+			"connected": status.Connected,
+			"content": map[string]any{
+				"kind":  status.Content.Kind,
+				"title": status.Content.Title,
+				"text":  status.Content.Text,
+				"url":   status.Content.URL,
+			},
+			"lastError": status.LastError,
+			"ts":        status.TS,
+		},
+	}
+	if err := a.transport.Emit("kiosk_status", payload); err != nil {
+		a.log.Debug("failed to emit kiosk_status", "error", err)
+	}
 }

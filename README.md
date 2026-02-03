@@ -103,6 +103,67 @@ Notes:
 
 The binary logs to stdout and to the file configured via `logging.file`. Service managers (systemd, supervisord, etc.) can run the binary directly with the desired config file.
 
+## Kiosk Mode (Optional)
+
+Kiosk mode enables the agent to display a fullscreen WebView window that can be controlled remotely from the dashboard. This is useful for digital signage, status displays, or interactive kiosks.
+
+### Enabling Kiosk Mode
+
+1. **Build with kiosk support** (requires CGO and native dependencies):
+
+```bash
+cd agent
+make build-kiosk
+```
+
+2. **Add kiosk configuration** to `agent-config.json`:
+
+```json
+{
+  "kiosk": {
+    "enabled": true,
+    "listenAddr": "127.0.0.1:0",
+    "fullscreen": true
+  }
+}
+```
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Enable kiosk mode |
+| `listenAddr` | `127.0.0.1:0` | Local HTTP/WS server address (ephemeral port by default) |
+| `fullscreen` | `true` | Open WebView in fullscreen mode |
+
+### Platform Dependencies
+
+Kiosk mode uses an embedded WebView which requires platform-specific dependencies:
+
+| Platform | Requirements |
+| --- | --- |
+| **Linux** | GTK 3, WebKitGTK (`libgtk-3-dev`, `libwebkit2gtk-4.0-dev`) |
+| **macOS** | WebKit (included in macOS, no extra deps) |
+| **Windows** | WebView2 Runtime (auto-installs on Windows 10+, or install from Microsoft) |
+
+### Dashboard Control
+
+When kiosk mode is enabled and the agent is connected, the dashboard's Actions view shows kiosk controls:
+
+- **Blank**: Show a blank screen
+- **Message**: Display a title and message
+- **URL**: Load a web page in an iframe
+
+The kiosk status indicator shows:
+- Green dot: Kiosk connected and displaying content
+- Yellow dot: Kiosk running but WebView not connected
+- Gray dot: Kiosk offline or not enabled
+
+### Security
+
+- The local kiosk HTTP/WS server binds to localhost by default
+- WebSocket connections require a random session token generated at startup
+- All kiosk commands from the dashboard are signed (same mechanism as shell commands)
+- URL content is restricted to `http://` and `https://` schemes only
+
 ## Packaging
 
 - **Docker**: `Dockerfile.agent` builds a minimal image that copies the Go binary.

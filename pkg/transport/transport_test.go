@@ -913,3 +913,83 @@ func TestFileChmodRequest_Fields(t *testing.T) {
 		t.Errorf("Mode = %q, want %q", req.Mode, "0755")
 	}
 }
+
+func TestKioskSetRequest_Fields(t *testing.T) {
+	req := KioskSetRequest{
+		RequestID: "kiosk-1",
+		Content: KioskContent{
+			Kind:  "message",
+			Title: "Welcome",
+			Text:  "Hello, World!",
+		},
+		TS: "2024-01-15T10:30:00Z",
+	}
+
+	if req.Content.Kind != "message" {
+		t.Errorf("Content.Kind = %q, want %q", req.Content.Kind, "message")
+	}
+	if req.Content.Title != "Welcome" {
+		t.Errorf("Content.Title = %q, want %q", req.Content.Title, "Welcome")
+	}
+	if req.Content.Text != "Hello, World!" {
+		t.Errorf("Content.Text = %q, want %q", req.Content.Text, "Hello, World!")
+	}
+}
+
+func TestKioskContent_Variants(t *testing.T) {
+	tests := []struct {
+		name    string
+		content KioskContent
+	}{
+		{
+			name:    "blank content",
+			content: KioskContent{Kind: "blank"},
+		},
+		{
+			name: "message content",
+			content: KioskContent{
+				Kind:  "message",
+				Title: "Title",
+				Text:  "Text",
+			},
+		},
+		{
+			name: "url content",
+			content: KioskContent{
+				Kind: "url",
+				URL:  "https://example.com",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.content.Kind == "" {
+				t.Error("Kind should not be empty")
+			}
+		})
+	}
+}
+
+func TestKioskStatus_Fields(t *testing.T) {
+	status := KioskStatus{
+		Running:   true,
+		Connected: true,
+		Content: KioskContent{
+			Kind:  "url",
+			URL:   "https://example.com",
+		},
+		LastError: "",
+		TS:        "2024-01-15T10:30:00Z",
+	}
+
+	if !status.Running {
+		t.Error("Running should be true")
+	}
+	if !status.Connected {
+		t.Error("Connected should be true")
+	}
+	if status.Content.Kind != "url" {
+		t.Errorf("Content.Kind = %q, want %q", status.Content.Kind, "url")
+	}
+}

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kiosk</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        #kiosk-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+        #kiosk-blank {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            background: #0f0f23;
+        }
+        #kiosk-message {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 40px;
+            max-width: 80%;
+        }
+        #kiosk-message h1 {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            color: #fff;
+        }
+        #kiosk-message p {
+            font-size: 1.5rem;
+            line-height: 1.6;
+            color: #ccc;
+            white-space: pre-wrap;
+        }
+        #kiosk-iframe {
+            display: none;
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        .status-indicator {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #444;
+            transition: background 0.3s;
+        }
+        .status-indicator.connected {
+            background: #4ade80;
+        }
+        .status-indicator.disconnected {
+            background: #f87171;
+        }
+    </style>
+</head>
+<body>
+    <div id="kiosk-container">
+        <div id="kiosk-blank"></div>
+        <div id="kiosk-message">
+            <h1 id="message-title"></h1>
+            <p id="message-text"></p>
+        </div>
+        <iframe id="kiosk-iframe" sandbox="allow-scripts allow-same-origin"></iframe>
+    </div>
+    <div id="status-indicator" class="status-indicator disconnected"></div>
+
+    <script>
+        const token = new URLSearchParams(window.location.search).get('token') || '';
+        const wsUrl = `ws://${window.location.host}/ws?token=${encodeURIComponent(token)}`;
+        
+        let ws = null;
+        let reconnectTimer = null;
+        let pingTimer = null;
+        
+        const blankEl = document.getElementById('kiosk-blank');
+        const messageEl = document.getElementById('kiosk-message');
+        const messageTitleEl = document.getElementById('message-title');
+        const messageTextEl = document.getElementById('message-text');
+        const iframeEl = document.getElementById('kiosk-iframe');
+        const statusEl = document.getElementById('status-indicator');
+        
+        function connect() {
+            if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+                return;
+            }
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('[kiosk] connected');
+                statusEl.className = 'status-indicator connected';
+                startPing();
+            };
+            
+            ws.onclose = () => {
+                console.log('[kiosk] disconnected');
+                statusEl.className = 'status-indicator disconnected';
+                stopPing();
+                scheduleReconnect();
+            };
+            
+            ws.onerror = (e) => {
+                console.error('[kiosk] ws error', e);
+            };
+            
+            ws.onmessage = (e) => {
+                try {
+                    const msg = JSON.parse(e.data);
+                    handleMessage(msg);
+                } catch (err) {
+                    console.error('[kiosk] parse error', err);
+                }
+            };
+        }
+        
+        function handleMessage(msg) {
+            if (msg.type === 'content') {
+                applyContent(msg.content);
+            } else if (msg.type === 'pong') {
+                // Keepalive response
+            }
+        }
+        
+        function applyContent(content) {
+            // Hide all views
+            blankEl.style.display = 'none';
+            messageEl.style.display = 'none';
+            iframeEl.style.display = 'none';
+            
+            switch (content.kind) {
+                case 'blank':
+                    blankEl.style.display = 'flex';
+                    break;
+                    
+                case 'message':
+                    messageTitleEl.textContent = content.title || '';
+                    messageTextEl.textContent = content.text || '';
+                    messageEl.style.display = 'flex';
+                    break;
+                    
+                case 'url':
+                    iframeEl.src = content.url;
+                    iframeEl.style.display = 'block';
+                    break;
+                    
+                default:
+                    blankEl.style.display = 'flex';
+            }
+        }
+        
+        function startPing() {
+            stopPing();
+            pingTimer = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'ping' }));
+                }
+            }, 30000);
+        }
+        
+        function stopPing() {
+            if (pingTimer) {
+                clearInterval(pingTimer);
+                pingTimer = null;
+            }
+        }
+        
+        function scheduleReconnect() {
+            if (reconnectTimer) return;
+            reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                connect();
+            }, 2000);
+        }
+        
+        // Initial connection
+        connect();
+    </script>
+</body>
+</html>

@@ -76,6 +76,7 @@ type Handlers struct {
 	FilePutFinish func(FilePutFinishRequest)
 	FileDelete    func(FileDeleteRequest)
 	FileChmod     func(FileChmodRequest)
+	KioskSet      func(KioskSetRequest)
 }
 
 // AdminCommand mirrors the payload emitted by the control plane.
@@ -269,6 +270,36 @@ type FileChmodResult struct {
 	Path      string `json:"path,omitempty"`
 	Mode      string `json:"mode,omitempty"`
 	Error     string `json:"error,omitempty"`
+}
+
+// --- Kiosk Operations ---
+
+// KioskContent describes what the kiosk should display.
+// Kind determines which fields are used:
+//   - "blank": no additional fields
+//   - "message": Title (optional) and Text are used
+//   - "url": URL is used (must be http: or https:)
+type KioskContent struct {
+	Kind  string `json:"kind"`            // "blank", "message", or "url"
+	Title string `json:"title,omitempty"` // for "message" kind
+	Text  string `json:"text,omitempty"`  // for "message" kind
+	URL   string `json:"url,omitempty"`   // for "url" kind
+}
+
+// KioskSetRequest is the signed command payload for setting kiosk content.
+type KioskSetRequest struct {
+	RequestID string       `json:"requestId,omitempty"`
+	Content   KioskContent `json:"content"`
+	TS        string       `json:"ts,omitempty"`
+}
+
+// KioskStatus reports the current state of the kiosk subsystem.
+type KioskStatus struct {
+	Running     bool         `json:"running"`
+	Connected   bool         `json:"connected"`
+	Content     KioskContent `json:"content,omitempty"`
+	LastError   string       `json:"lastError,omitempty"`
+	TS          string       `json:"ts"`
 }
 
 // Client maintains the socket.io/WebSocket session to the control plane.
@@ -880,6 +911,16 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 		}
 		if c.handlers.FileChmod != nil {
 			c.handlers.FileChmod(msg)
+		}
+
+	case "kiosk_set":
+		var msg KioskSetRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal kiosk_set payload", "error", err)
+			return
+		}
+		if c.handlers.KioskSet != nil {
+			c.handlers.KioskSet(msg)
 		}
 
 	default:

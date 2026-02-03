@@ -27,6 +27,15 @@ build-all:
 		GOOS=$${os} GOARCH=$${arch} CGO_ENABLED=0 go build -o "$${out}" ./cmd/agent || exit $$?; \
 	done
 
+# Build with kiosk mode support (host OS only, requires CGO and native deps)
+# Linux: apt install libgtk-3-dev libwebkit2gtk-4.0-dev
+# macOS: WebKit included
+# Windows: WebView2 runtime required
+.PHONY: build-kiosk
+build-kiosk:
+	@mkdir -p $(BINDIR)
+	CGO_ENABLED=1 go build -tags kiosk -o $(BINDIR)/$(APP)-kiosk ./cmd/agent
+
 .PHONY: tidy
 tidy:
 	go mod tidy

@@ -31,6 +31,17 @@ type Config struct {
 	Logging        LoggingConfig      `json:"logging"`
 	Shell          ShellConfig        `json:"shell"`
 	DirBrowse      DirBrowseConfig    `json:"dirBrowse"`
+	Kiosk          KioskConfig        `json:"kiosk"`
+}
+
+// KioskConfig controls the optional kiosk mode (fullscreen WebView display).
+type KioskConfig struct {
+	// Enabled starts the kiosk subsystem. Requires a build with -tags kiosk.
+	Enabled bool `json:"enabled"`
+	// ListenAddr is the address for the local kiosk HTTP/WS server (default "127.0.0.1:0" for ephemeral port).
+	ListenAddr string `json:"listenAddr"`
+	// Fullscreen opens the WebView in fullscreen mode (default true).
+	Fullscreen bool `json:"fullscreen"`
 }
 
 // DirBrowseConfig controls directory browsing behavior (RFC-0002).
@@ -227,6 +238,13 @@ func (c *Config) applyDefaults() {
 	if c.DirBrowse.SMBProfiles == nil {
 		c.DirBrowse.SMBProfiles = map[string]SMBProfile{}
 	}
+
+	// Kiosk defaults
+	if c.Kiosk.ListenAddr == "" {
+		c.Kiosk.ListenAddr = "127.0.0.1:0"
+	}
+	// Fullscreen defaults to true when kiosk is enabled
+	// (Go zero-value is false, so we only set it if config explicitly doesn't specify)
 }
 
 func (c *Config) applyEnvOverrides() {
