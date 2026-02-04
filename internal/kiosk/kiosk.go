@@ -11,10 +11,6 @@ import (
 	"time"
 )
 
-// ErrKioskNotSupported is returned when kiosk mode is enabled but the binary
-// was compiled without the kiosk build tag.
-var ErrKioskNotSupported = errors.New("kiosk mode requires a build with -tags kiosk")
-
 // ErrKioskNotRunning is returned when trying to set content on a stopped kiosk.
 var ErrKioskNotRunning = errors.New("kiosk is not running")
 

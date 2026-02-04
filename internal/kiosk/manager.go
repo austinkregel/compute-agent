@@ -1,5 +1,3 @@
-//go:build kiosk && cgo
-
 package kiosk
 
 import (
@@ -12,19 +10,20 @@ import (
 	"html/template"
 	"net"
 	"net/http"
+	"os/exec"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/austinkregel/compute-agent/pkg/logging"
-	"github.com/webview/webview"
 	"nhooyr.io/websocket"
 )
 
 //go:embed kiosk_page.html
 var kioskPageFS embed.FS
 
-// realManager implements Manager using webview and a local HTTP/WS server.
-type realManager struct {
+// manager implements Manager using webview and a local HTTP/WS server.
+type manager struct {
 	cfg      Config
 	log      *logging.Logger
 	onStatus StatusFunc
@@ -47,7 +46,7 @@ type realManager struct {
 	server   *http.Server
 }
 
-// New creates a kiosk manager with WebView support.
+// New creates a kiosk manager.
 func New(cfg Config, log *logging.Logger, onStatus StatusFunc) (Manager, error) {
 	// Generate random session token
 	tokenBytes := make([]byte, 16)
@@ -56,7 +55,7 @@ func New(cfg Config, log *logging.Logger, onStatus StatusFunc) (Manager, error) 
 	}
 	token := hex.EncodeToString(tokenBytes)
 
-	return &realManager{
+	return &manager{
 		cfg:      cfg,
 		log:      log,
 		onStatus: onStatus,
@@ -65,7 +64,7 @@ func New(cfg Config, log *logging.Logger, onStatus StatusFunc) (Manager, error) 
 	}, nil
 }
 
-func (m *realManager) Run(ctx context.Context) error {
+func (m *manager) Run(ctx context.Context) error {
 	// Start HTTP server
 	listener, err := net.Listen("tcp", m.cfg.ListenAddr)
 	if err != nil {
@@ -94,17 +93,9 @@ func (m *realManager) Run(ctx context.Context) error {
 	m.setRunning(true)
 	defer m.setRunning(false)
 
-	// Start WebView
+	// Open kiosk in system browser
 	kioskURL := fmt.Sprintf("http://%s/?token=%s", addr, m.token)
-	m.log.Info("starting kiosk webview", "url", kioskURL)
-
-	// WebView runs on main thread, so we need to run it in a separate goroutine
-	// and coordinate shutdown
-	wvDone := make(chan struct{})
-	go func() {
-		defer close(wvDone)
-		m.runWebView(kioskURL)
-	}()
+	m.runBrowser(kioskURL)
 
 	// Wait for context cancellation or errors
 	select {
@@ -115,8 +106,6 @@ func (m *realManager) Run(ctx context.Context) error {
 			m.log.Error("kiosk server error", "error", err)
 			return err
 		}
-	case <-wvDone:
-		m.log.Info("kiosk webview closed")
 	}
 
 	// Shutdown HTTP server
@@ -127,25 +116,32 @@ func (m *realManager) Run(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (m *realManager) runWebView(url string) {
-	w := webview.New(false)
-	if w == nil {
-		m.setError("failed to create webview")
-		return
+// openBrowser opens the given URL in the system's default browser.
+// This is the fallback when embedded WebView is not available.
+func (m *manager) openBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", "", url)
+	default: // linux and others
+		cmd = exec.Command("xdg-open", url)
 	}
-	defer w.Destroy()
-
-	w.SetTitle("Kiosk")
-	w.SetSize(1920, 1080, webview.HintNone)
-
-	// Navigate to our local kiosk page
-	w.Navigate(url)
-
-	// Run the webview event loop
-	w.Run()
+	return cmd.Start()
 }
 
-func (m *realManager) handleIndex(w http.ResponseWriter, r *http.Request) {
+func (m *manager) runBrowser(url string) {
+	m.log.Info("opening kiosk in system browser", "url", url)
+	if err := m.openBrowser(url); err != nil {
+		m.setError(fmt.Sprintf("failed to open browser: %v", err))
+		return
+	}
+	// Browser runs independently - we just keep the HTTP server running
+	// The kiosk will connect back via WebSocket
+}
+
+func (m *manager) handleIndex(w http.ResponseWriter, r *http.Request) {
 	tmplData, err := kioskPageFS.ReadFile("kiosk_page.html")
 	if err != nil {
 		http.Error(w, "internal error", 500)
@@ -164,7 +160,7 @@ func (m *realManager) handleIndex(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (m *realManager) handleWS(w http.ResponseWriter, r *http.Request) {
+func (m *manager) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Validate token
 	token := r.URL.Query().Get("token")
 	if token != m.token {
@@ -209,7 +205,7 @@ func (m *realManager) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (m *realManager) SetContent(c Content) error {
+func (m *manager) SetContent(c Content) error {
 	if err := ValidateContent(c); err != nil {
 		return err
 	}
@@ -223,7 +219,7 @@ func (m *realManager) SetContent(c Content) error {
 	return nil
 }
 
-func (m *realManager) pushContent() {
+func (m *manager) pushContent() {
 	m.wsMu.Lock()
 	conn := m.wsConn
 	m.wsMu.Unlock()
@@ -250,7 +246,7 @@ func (m *realManager) pushContent() {
 	}
 }
 
-func (m *realManager) Status() Status {
+func (m *manager) Status() Status {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -261,14 +257,14 @@ func (m *realManager) Status() Status {
 	return NewStatus(m.running, connected, m.content, m.lastError)
 }
 
-func (m *realManager) setRunning(running bool) {
+func (m *manager) setRunning(running bool) {
 	m.mu.Lock()
 	m.running = running
 	m.mu.Unlock()
 	m.emitStatus()
 }
 
-func (m *realManager) setWSConn(conn *websocket.Conn) {
+func (m *manager) setWSConn(conn *websocket.Conn) {
 	m.wsMu.Lock()
 	m.wsConn = conn
 	m.wsMu.Unlock()
@@ -280,14 +276,14 @@ func (m *realManager) setWSConn(conn *websocket.Conn) {
 	m.emitStatus()
 }
 
-func (m *realManager) setError(err string) {
+func (m *manager) setError(err string) {
 	m.mu.Lock()
 	m.lastError = err
 	m.mu.Unlock()
 	m.emitStatus()
 }
 
-func (m *realManager) emitStatus() {
+func (m *manager) emitStatus() {
 	if m.onStatus != nil {
 		m.onStatus(m.Status())
 	}

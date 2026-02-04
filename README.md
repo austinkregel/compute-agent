@@ -103,20 +103,15 @@ Notes:
 
 The binary logs to stdout and to the file configured via `logging.file`. Service managers (systemd, supervisord, etc.) can run the binary directly with the desired config file.
 
-## Kiosk Mode (Optional)
+## Kiosk Mode
 
-Kiosk mode enables the agent to display a fullscreen WebView window that can be controlled remotely from the dashboard. This is useful for digital signage, status displays, or interactive kiosks.
+Kiosk mode enables the agent to display a browser window that can be controlled remotely from the dashboard. This is useful for digital signage, status displays, or interactive kiosks.
+
+When enabled, the agent starts a local HTTP server and opens the system's default browser to display kiosk content. The dashboard can then control what's shown on the kiosk.
 
 ### Enabling Kiosk Mode
 
-1. **Build with kiosk support** (requires CGO and native dependencies):
-
-```bash
-cd agent
-make build-kiosk
-```
-
-2. **Add kiosk configuration** to `agent-config.json`:
+Add the kiosk configuration to `agent-config.json`:
 
 ```json
 {
@@ -132,17 +127,9 @@ make build-kiosk
 | --- | --- | --- |
 | `enabled` | `false` | Enable kiosk mode |
 | `listenAddr` | `127.0.0.1:0` | Local HTTP/WS server address (ephemeral port by default) |
-| `fullscreen` | `true` | Open WebView in fullscreen mode |
+| `fullscreen` | `true` | (Reserved for future use) |
 
-### Platform Dependencies
-
-Kiosk mode uses an embedded WebView which requires platform-specific dependencies:
-
-| Platform | Requirements |
-| --- | --- |
-| **Linux** | GTK 3, WebKitGTK (`libgtk-3-dev`, `libwebkit2gtk-4.0-dev`) |
-| **macOS** | WebKit (included in macOS, no extra deps) |
-| **Windows** | WebView2 Runtime (auto-installs on Windows 10+, or install from Microsoft) |
+**Tip:** For a true kiosk experience, configure your browser to launch in fullscreen/kiosk mode (e.g., Chrome's `--kiosk` flag).
 
 ### Dashboard Control
 
@@ -154,7 +141,7 @@ When kiosk mode is enabled and the agent is connected, the dashboard's Actions v
 
 The kiosk status indicator shows:
 - Green dot: Kiosk connected and displaying content
-- Yellow dot: Kiosk running but WebView not connected
+- Yellow dot: Kiosk running but browser not connected
 - Gray dot: Kiosk offline or not enabled
 
 ### Security
