@@ -32,6 +32,7 @@ type Config struct {
 	Shell          ShellConfig        `json:"shell"`
 	DirBrowse      DirBrowseConfig    `json:"dirBrowse"`
 	Kiosk          KioskConfig        `json:"kiosk"`
+	Alerts         AlertsConfig       `json:"alerts"`
 }
 
 // KioskConfig controls the optional kiosk mode (fullscreen WebView display).
@@ -42,6 +43,21 @@ type KioskConfig struct {
 	ListenAddr string `json:"listenAddr"`
 	// Fullscreen opens the WebView in fullscreen mode (default true).
 	Fullscreen bool `json:"fullscreen"`
+}
+
+// AlertsConfig controls OS-level alert monitoring (kernel panics, segfaults, OOM, etc.).
+type AlertsConfig struct {
+	// Enabled enables OS alert collection. Default: true on Linux.
+	Enabled bool `json:"enabled"`
+	// ScanIntervalSec is how often to scan for new alerts. Default: 300 (5 minutes).
+	ScanIntervalSec int `json:"scanIntervalSec"`
+	// MaxAlerts is the maximum number of alerts to retain. Default: 50.
+	MaxAlerts int `json:"maxAlerts"`
+	// LookbackHours is how far back to scan on startup. Default: 24.
+	LookbackHours int `json:"lookbackHours"`
+	// Categories filters to specific alert categories. Empty means all.
+	// Supported: kernel_panic, oom, memory, hardware, segfault, disk_io, driver, thermal, watchdog, network
+	Categories []string `json:"categories"`
 }
 
 // DirBrowseConfig controls directory browsing behavior (RFC-0002).
@@ -245,6 +261,22 @@ func (c *Config) applyDefaults() {
 	}
 	// Fullscreen defaults to true when kiosk is enabled
 	// (Go zero-value is false, so we only set it if config explicitly doesn't specify)
+
+	// Alerts defaults: enabled by default on Linux
+	if runtime.GOOS == "linux" && !c.Alerts.Enabled {
+		// Check if this is a zero-value (not explicitly set to false)
+		// We enable by default on Linux; users can set enabled: false to disable
+		c.Alerts.Enabled = true
+	}
+	if c.Alerts.ScanIntervalSec <= 0 {
+		c.Alerts.ScanIntervalSec = 300 // 5 minutes
+	}
+	if c.Alerts.MaxAlerts <= 0 {
+		c.Alerts.MaxAlerts = 50
+	}
+	if c.Alerts.LookbackHours <= 0 {
+		c.Alerts.LookbackHours = 24
+	}
 }
 
 func (c *Config) applyEnvOverrides() {

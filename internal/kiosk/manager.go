@@ -10,8 +10,6 @@ import (
 	"html/template"
 	"net"
 	"net/http"
-	"os/exec"
-	"runtime"
 	"sync"
 	"time"
 
@@ -47,7 +45,12 @@ type manager struct {
 }
 
 // New creates a kiosk manager.
+// Returns an error if WebView support is not available (CGO disabled).
 func New(cfg Config, log *logging.Logger, onStatus StatusFunc) (Manager, error) {
+	if !webviewAvailable {
+		return nil, ErrWebViewUnavailable
+	}
+
 	// Generate random session token
 	tokenBytes := make([]byte, 16)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -93,14 +96,27 @@ func (m *manager) Run(ctx context.Context) error {
 	m.setRunning(true)
 	defer m.setRunning(false)
 
-	// Open kiosk in system browser
+	// Launch WebView
 	kioskURL := fmt.Sprintf("http://%s/?token=%s", addr, m.token)
-	m.runBrowser(kioskURL)
+	m.log.Info("launching kiosk webview", "url", kioskURL)
 
-	// Wait for context cancellation or errors
+	// WebView blocks until closed, run in goroutine
+	webviewDone := make(chan error, 1)
+	go func() {
+		webviewDone <- launchWebView(kioskURL, m.cfg.Fullscreen)
+	}()
+
+	// Wait for context cancellation, WebView close, or HTTP server error
 	select {
 	case <-ctx.Done():
 		m.log.Info("kiosk shutting down")
+	case err := <-webviewDone:
+		if err != nil {
+			m.log.Error("webview error", "error", err)
+			m.setError(err.Error())
+		} else {
+			m.log.Info("kiosk webview closed")
+		}
 	case err := <-serverErr:
 		if err != nil {
 			m.log.Error("kiosk server error", "error", err)
@@ -114,31 +130,6 @@ func (m *manager) Run(ctx context.Context) error {
 	_ = m.server.Shutdown(shutdownCtx)
 
 	return ctx.Err()
-}
-
-// openBrowser opens the given URL in the system's default browser.
-// This is the fallback when embedded WebView is not available.
-func (m *manager) openBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", "", url)
-	default: // linux and others
-		cmd = exec.Command("xdg-open", url)
-	}
-	return cmd.Start()
-}
-
-func (m *manager) runBrowser(url string) {
-	m.log.Info("opening kiosk in system browser", "url", url)
-	if err := m.openBrowser(url); err != nil {
-		m.setError(fmt.Sprintf("failed to open browser: %v", err))
-		return
-	}
-	// Browser runs independently - we just keep the HTTP server running
-	// The kiosk will connect back via WebSocket
 }
 
 func (m *manager) handleIndex(w http.ResponseWriter, r *http.Request) {

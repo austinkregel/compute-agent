@@ -42,12 +42,103 @@ jobs:
       - name: Run tests
         run: make test
 
-  build:
+  # Build Linux binaries with CGO for WebView/kiosk support
+  build-linux:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
-      contents: write
-    
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            goarch: amd64
+          - arch: arm64
+            goarch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install WebKit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Install cross-compilation tools
+        if: matrix.arch == 'arm64'
+        run: |
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get install -y libgtk-3-dev:arm64 libwebkit2gtk-4.1-dev:arm64 || true
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+            echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine build metadata
+        id: meta
+        run: |
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build Linux ${{ matrix.arch }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          BUILD_DATE: ${{ steps.meta.outputs.build_date }}
+          CGO_ENABLED: 1
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CC: ${{ matrix.arch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
+          CXX: ${{ matrix.arch == 'arm64' && 'aarch64-linux-gnu-g++' || 'g++' }}
+        run: |
+          mkdir -p dist
+          # For arm64 cross-compile, fall back to CGO_ENABLED=0 if cross-deps unavailable
+          if [ "${{ matrix.arch }}" == "arm64" ]; then
+            export CGO_ENABLED=0
+          fi
+          go build \
+            -trimpath \
+            -ldflags "-s -w \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
+            -o "dist/backup-agent-linux-${{ matrix.arch }}" \
+            ./cmd/agent
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-agent-linux-${{ matrix.arch }}
+          path: dist/backup-agent-linux-${{ matrix.arch }}
+          retention-days: 1
+
+  # Build macOS binaries with CGO for WebView/kiosk support
+  build-macos:
+    needs: test
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            goarch: amd64
+          - arch: arm64
+            goarch: arm64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -60,7 +151,67 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
           else
-            # Extract version from tag (e.g., refs/tags/v1.0.0 -> v1.0.0)
+            VERSION="${GITHUB_REF#refs/tags/}"
+            echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine build metadata
+        id: meta
+        run: |
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build macOS ${{ matrix.arch }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          BUILD_DATE: ${{ steps.meta.outputs.build_date }}
+          CGO_ENABLED: 1
+          GOOS: darwin
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags "-s -w \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
+            -o "dist/backup-agent-darwin-${{ matrix.arch }}" \
+            ./cmd/agent
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-agent-darwin-${{ matrix.arch }}
+          path: dist/backup-agent-darwin-${{ matrix.arch }}
+          retention-days: 1
+
+  # Build Windows binaries with CGO for WebView2/kiosk support
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
             VERSION="${GITHUB_REF#refs/tags/}"
             echo "version=${VERSION}" >> $GITHUB_OUTPUT
           fi
@@ -78,43 +229,69 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Build all platforms
+      - name: Build Windows amd64
         shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          BUILD_DATE: ${{ steps.meta.outputs.build_date }}
+          CGO_ENABLED: 1
+          GOOS: windows
+          GOARCH: amd64
         run: |
-          set -euo pipefail
-          VERSION='${{ steps.version.outputs.version }}'
-          SHA='${{ steps.meta.outputs.sha }}'
-          BUILD_DATE='${{ steps.meta.outputs.build_date }}'
-          echo "Building compute-agent binaries: version=$VERSION sha=$SHA buildDate=$BUILD_DATE"
-
           mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags "-s -w \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
+            -o "dist/backup-agent-windows-amd64.exe" \
+            ./cmd/agent
 
-          # Keep platform list in sync with Makefile, but embed ldflags for version reporting.
-          PLATFORMS=(
-            "linux/amd64"
-            "linux/arm64"
-            "linux/arm"
-            "darwin/amd64"
-            "darwin/arm64"
-            "windows/amd64"
-          )
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-agent-windows-amd64
+          path: dist/backup-agent-windows-amd64.exe
+          retention-days: 1
 
-          for platform in "${PLATFORMS[@]}"; do
-            os="${platform%%/*}"
-            arch="${platform##*/}"
-            out="dist/backup-agent-${os}-${arch}"
-            if [ "${os}" = "windows" ]; then out="${out}.exe"; fi
-            echo ">> building ${os}/${arch} -> ${out}"
-            GOOS="${os}" GOARCH="${arch}" CGO_ENABLED=0 \
-              go build \
-                -trimpath \
-                -ldflags "-s -w \
-                  -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
-                  -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
-                  -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
-                -o "${out}" \
-                ./cmd/agent
-          done
+  # Collect all binaries and create release
+  release:
+    needs: [build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+            echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine build metadata
+        id: meta
+        run: |
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/binaries
+
+      - name: Organize binaries
+        run: |
+          mkdir -p dist/release
+          # Move all binaries to a flat structure
+          find dist/binaries -type f -name 'backup-agent-*' -exec mv {} dist/ \;
 
       - name: Create release archive
         run: |

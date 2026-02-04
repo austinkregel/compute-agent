@@ -19,6 +19,7 @@ import (
 
 	"github.com/austinkregel/compute-agent/pkg/config"
 	"github.com/austinkregel/compute-agent/pkg/logging"
+	"github.com/austinkregel/compute-agent/pkg/sysalerts"
 	"github.com/austinkregel/compute-agent/pkg/transport"
 	"github.com/austinkregel/compute-agent/pkg/version"
 )
@@ -40,6 +41,7 @@ type Publisher struct {
 	log     *logging.Logger
 	emitter transport.Emitter
 	updates *UpdateChecker
+	alerts  *sysalerts.Monitor
 
 	warnMu          sync.Mutex
 	lastBatteryWarn time.Time
@@ -50,6 +52,10 @@ type Publisher struct {
 	cachedTimeSyncStatus string
 	lastServiceCheck     time.Time
 	cachedServiceHealth  *ServiceHealth
+
+	alertsMu        sync.Mutex
+	lastAlertsScan  time.Time
+	cachedAlerts    *sysalerts.AlertSnapshot
 }
 
 // NewPublisher creates a telemetry publisher.
@@ -64,6 +70,19 @@ func NewPublisher(cfg *config.Config, log *logging.Logger, emitter transport.Emi
 		batteryDebugLog = func(msg string) {
 			log.Debug(msg)
 		}
+	}
+	// Initialize OS alerts monitor (Linux only for now)
+	if cfg != nil && cfg.Alerts.Enabled {
+		alertsCfg := sysalerts.MonitorConfig{
+			Enabled:       cfg.Alerts.Enabled,
+			ScanInterval:  cfg.Alerts.ScanIntervalSec,
+			MaxAlerts:     cfg.Alerts.MaxAlerts,
+			LookbackHours: cfg.Alerts.LookbackHours,
+			Categories:    cfg.Alerts.Categories,
+		}
+		p.alerts = sysalerts.NewMonitor(alertsCfg, log)
+		// Do an initial scan
+		p.alerts.Scan()
 	}
 	return p
 }
@@ -197,6 +216,14 @@ func (p *Publisher) emitSample() {
 		}
 		if sh := p.getServiceHealthCached(); sh != nil {
 			sample.ServiceHealth = sh
+		}
+	}
+
+	// OS alerts (kernel panics, segfaults, OOM, hardware errors, etc.)
+	if alerts := p.getAlertsCached(); alerts != nil && len(alerts.Alerts) > 0 {
+		sample.Alerts = alerts
+		if alerts.HasCritical {
+			p.log.Warn("critical OS alerts detected", "count", alerts.TotalCount)
 		}
 	}
 
@@ -436,6 +463,33 @@ func (p *Publisher) getServiceHealthCached() *ServiceHealth {
 	return p.cachedServiceHealth
 }
 
+// getAlertsCached returns OS alerts, rescanning periodically based on config.
+func (p *Publisher) getAlertsCached() *sysalerts.AlertSnapshot {
+	if p.alerts == nil {
+		return nil
+	}
+
+	// Default scan interval is 5 minutes; use config if available
+	scanInterval := 5 * time.Minute
+	if p.cfg != nil && p.cfg.Alerts.ScanIntervalSec > 0 {
+		scanInterval = time.Duration(p.cfg.Alerts.ScanIntervalSec) * time.Second
+	}
+
+	p.alertsMu.Lock()
+	defer p.alertsMu.Unlock()
+
+	now := time.Now()
+	if !p.lastAlertsScan.IsZero() && now.Sub(p.lastAlertsScan) < scanInterval {
+		return p.cachedAlerts
+	}
+	p.lastAlertsScan = now
+
+	// Run a fresh scan
+	p.alerts.Scan()
+	p.cachedAlerts = p.alerts.Snapshot()
+	return p.cachedAlerts
+}
+
 func (p *Publisher) rateLimitedWarn(last *time.Time, every time.Duration, msg string, args ...any) {
 	if p == nil || p.log == nil {
 		return
@@ -454,27 +508,28 @@ func (p *Publisher) rateLimitedWarn(last *time.Time, every time.Duration, msg st
 
 // StatsSample defines the schema sent to the control plane.
 type StatsSample struct {
-	AgentVersion        string          `json:"agentVersion,omitempty"`
-	CPUPercent          float64         `json:"cpu"`
-	Mem                 *MemInfo        `json:"mem,omitempty"` // UI expects mem object, not memPercent
-	Load                LoadAvg         `json:"load"`
-	Disk                []DiskInfo      `json:"disk,omitempty"`
-	NetIfaces           []NetInterface  `json:"netIfaces,omitempty"`
-	Hostname            string          `json:"hostname,omitempty"`
-	Platform            string          `json:"platform,omitempty"`
-	Release             string          `json:"release,omitempty"`
-	Arch                string          `json:"arch,omitempty"`
-	CPUs                int             `json:"cpus,omitempty"`
-	UptimeSec           uint64          `json:"uptimeSec,omitempty"`
-	Battery             *BatteryInfo    `json:"battery,omitempty"`
-	Thermal             []ThermalSensor `json:"thermal,omitempty"`
-	Updates             *UpdateInfo     `json:"updates,omitempty"`
-	LastReboot          string          `json:"lastReboot,omitempty"` // RFC3339 timestamp (UTC)
-	KernelVersion       string          `json:"kernelVersion,omitempty"`
-	SecurityPatchStatus string          `json:"securityPatchStatus,omitempty"`
-	ServiceHealth       *ServiceHealth  `json:"serviceHealth,omitempty"`
-	TimeSyncStatus      string          `json:"timeSyncStatus,omitempty"`
-	Timestamp           string          `json:"ts"`
+	AgentVersion        string                   `json:"agentVersion,omitempty"`
+	CPUPercent          float64                  `json:"cpu"`
+	Mem                 *MemInfo                 `json:"mem,omitempty"` // UI expects mem object, not memPercent
+	Load                LoadAvg                  `json:"load"`
+	Disk                []DiskInfo               `json:"disk,omitempty"`
+	NetIfaces           []NetInterface           `json:"netIfaces,omitempty"`
+	Hostname            string                   `json:"hostname,omitempty"`
+	Platform            string                   `json:"platform,omitempty"`
+	Release             string                   `json:"release,omitempty"`
+	Arch                string                   `json:"arch,omitempty"`
+	CPUs                int                      `json:"cpus,omitempty"`
+	UptimeSec           uint64                   `json:"uptimeSec,omitempty"`
+	Battery             *BatteryInfo             `json:"battery,omitempty"`
+	Thermal             []ThermalSensor          `json:"thermal,omitempty"`
+	Updates             *UpdateInfo              `json:"updates,omitempty"`
+	LastReboot          string                   `json:"lastReboot,omitempty"` // RFC3339 timestamp (UTC)
+	KernelVersion       string                   `json:"kernelVersion,omitempty"`
+	SecurityPatchStatus string                   `json:"securityPatchStatus,omitempty"`
+	ServiceHealth       *ServiceHealth           `json:"serviceHealth,omitempty"`
+	TimeSyncStatus      string                   `json:"timeSyncStatus,omitempty"`
+	Alerts              *sysalerts.AlertSnapshot `json:"alerts,omitempty"`
+	Timestamp           string                   `json:"ts"`
 }
 
 type ServiceHealth struct {

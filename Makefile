@@ -9,11 +9,22 @@ PLATFORMS = \
 	darwin/arm64 \
 	windows/amd64
 
+# Build for host platform with kiosk support (requires CGO + platform deps)
+# Linux: apt install libgtk-3-dev libwebkit2gtk-4.0-dev
+# macOS: WebKit included by default
+# Windows: WebView2 runtime required
 .PHONY: build
 build:
 	@mkdir -p $(BINDIR)
-	go build -o $(BINDIR)/$(APP) ./cmd/agent
+	CGO_ENABLED=1 go build -o $(BINDIR)/$(APP) ./cmd/agent
 
+# Build without kiosk support (no CGO, faster, cross-platform compatible)
+.PHONY: build-headless
+build-headless:
+	@mkdir -p $(BINDIR)
+	CGO_ENABLED=0 go build -o $(BINDIR)/$(APP) ./cmd/agent
+
+# Cross-compile for all platforms (headless only, no kiosk - CGO disabled)
 .PHONY: build-all
 build-all:
 	@mkdir -p $(BINDIR)

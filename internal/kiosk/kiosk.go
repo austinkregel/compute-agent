@@ -17,6 +17,13 @@ var ErrKioskNotRunning = errors.New("kiosk is not running")
 // ErrInvalidContent is returned when the content fails validation.
 var ErrInvalidContent = errors.New("invalid kiosk content")
 
+// ErrWebViewUnavailable is returned when kiosk mode is enabled but WebView
+// support is not available (binary compiled without CGO).
+var ErrWebViewUnavailable = errors.New("kiosk mode requires CGO; rebuild with CGO_ENABLED=1")
+
+// ErrWebViewFailed is returned when the WebView fails to initialize.
+var ErrWebViewFailed = errors.New("failed to create webview")
+
 // Content describes what the kiosk should display.
 type Content struct {
 	Kind  string `json:"kind"`            // "blank", "message", or "url"

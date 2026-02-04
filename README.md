@@ -105,9 +105,31 @@ The binary logs to stdout and to the file configured via `logging.file`. Service
 
 ## Kiosk Mode
 
-Kiosk mode enables the agent to display a browser window that can be controlled remotely from the dashboard. This is useful for digital signage, status displays, or interactive kiosks.
+Kiosk mode enables the agent to display a fullscreen window that can be controlled remotely from the dashboard. This is useful for digital signage, status displays, or interactive kiosks.
 
-When enabled, the agent starts a local HTTP server and opens the system's default browser to display kiosk content. The dashboard can then control what's shown on the kiosk.
+When enabled, the agent opens a native WebView window that displays content controlled by the dashboard.
+
+### Build Requirements
+
+Kiosk mode requires CGO and platform-specific dependencies. The CI pipeline handles this automatically.
+
+| Platform | Build Requirements |
+| --- | --- |
+| **Linux** | `apt install libgtk-3-dev libwebkit2gtk-4.1-dev` |
+| **macOS** | Xcode command line tools (WebKit included) |
+| **Windows** | Edge browser (uses kiosk mode) |
+
+Build with kiosk support:
+```bash
+make build  # CGO_ENABLED=1
+```
+
+Build without kiosk (headless only, for cross-compilation):
+```bash
+make build-headless  # CGO_ENABLED=0
+```
+
+If kiosk is enabled in config but the agent was built without CGO, it will log an error and continue running without kiosk.
 
 ### Enabling Kiosk Mode
 
@@ -127,9 +149,7 @@ Add the kiosk configuration to `agent-config.json`:
 | --- | --- | --- |
 | `enabled` | `false` | Enable kiosk mode |
 | `listenAddr` | `127.0.0.1:0` | Local HTTP/WS server address (ephemeral port by default) |
-| `fullscreen` | `true` | (Reserved for future use) |
-
-**Tip:** For a true kiosk experience, configure your browser to launch in fullscreen/kiosk mode (e.g., Chrome's `--kiosk` flag).
+| `fullscreen` | `true` | Open window in fullscreen mode |
 
 ### Dashboard Control
 
@@ -141,7 +161,7 @@ When kiosk mode is enabled and the agent is connected, the dashboard's Actions v
 
 The kiosk status indicator shows:
 - Green dot: Kiosk connected and displaying content
-- Yellow dot: Kiosk running but browser not connected
+- Yellow dot: Kiosk running but not connected
 - Gray dot: Kiosk offline or not enabled
 
 ### Security
