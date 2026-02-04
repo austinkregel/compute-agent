@@ -42,13 +42,19 @@ build-all:
 tidy:
 	go mod tidy
 
+# Run tests without CGO (works in CI and environments without WebView deps)
 .PHONY: test
 test:
-	go test ./...
+	CGO_ENABLED=0 go test ./...
+
+# Run tests with CGO (requires WebView dependencies)
+.PHONY: test-cgo
+test-cgo:
+	CGO_ENABLED=1 go test ./...
 
 .PHONY: coverage
 coverage:
-	go test ./... -coverpkg=./... -coverprofile=coverage.out
+	CGO_ENABLED=0 go test ./... -coverpkg=./... -coverprofile=coverage.out
 	go tool cover -html=coverage.out -o coverage.html
 
 
