@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -376,8 +375,319 @@ func TestGetBatteryInfo_MultipleBatteries(t *testing.T) {
 	}
 }
 
+func TestGetBatteryInfo_ChromeOSBattery(t *testing.T) {
+	tmpDir := t.TempDir()
+	root := filepath.Join(tmpDir, "power_supply")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatalf("failed to create test dir: %v", err)
+	}
+
+	// Create a Chrome OS EC battery device
+	batteryDir := filepath.Join(root, "sbs-battery")
+	if err := os.MkdirAll(batteryDir, 0755); err != nil {
+		t.Fatalf("failed to create battery dir: %v", err)
+	}
+	// Chrome OS batteries often have type=Battery
+	if err := os.WriteFile(filepath.Join(batteryDir, "type"), []byte("Battery\n"), 0644); err != nil {
+		t.Fatalf("failed to write type file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(batteryDir, "capacity"), []byte("92\n"), 0644); err != nil {
+		t.Fatalf("failed to write capacity file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(batteryDir, "status"), []byte("Charging\n"), 0644); err != nil {
+		t.Fatalf("failed to write status file: %v", err)
+	}
+
+	// Also create an AC adapter that should be ignored
+	acDir := filepath.Join(root, "sbs-charger")
+	if err := os.MkdirAll(acDir, 0755); err != nil {
+		t.Fatalf("failed to create AC dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(acDir, "type"), []byte("Mains\n"), 0644); err != nil {
+		t.Fatalf("failed to write AC type file: %v", err)
+	}
+
+	origGetBatteryInfo := getBatteryInfo
+	defer func() { getBatteryInfo = origGetBatteryInfo }()
+
+	getBatteryInfo = func() (*BatteryInfo, error) {
+		return getBatteryInfoFromRoot(root)
+	}
+
+	info, err := getBatteryInfo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info == nil {
+		t.Fatal("expected battery info, got nil")
+	}
+	if len(info.Devices) != 1 {
+		t.Fatalf("expected 1 battery device, got %d", len(info.Devices))
+	}
+
+	dev := info.Devices[0]
+	if dev.ID != "sbs-battery" {
+		t.Errorf("expected device ID sbs-battery, got %s", dev.ID)
+	}
+	if dev.Percent != 92.0 {
+		t.Errorf("expected percent 92.0, got %.1f", dev.Percent)
+	}
+	if dev.Status != "charging" {
+		t.Errorf("expected status charging, got %s", dev.Status)
+	}
+}
+
+func TestGetBatteryInfo_SBSBatteryWithoutTypeFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	root := filepath.Join(tmpDir, "power_supply")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatalf("failed to create test dir: %v", err)
+	}
+
+	// Create an SBS battery device without a type file but with battery attributes
+	batteryDir := filepath.Join(root, "sbs-20-000b")
+	if err := os.MkdirAll(batteryDir, 0755); err != nil {
+		t.Fatalf("failed to create battery dir: %v", err)
+	}
+	// No type file - should still be detected via capacity file presence
+	if err := os.WriteFile(filepath.Join(batteryDir, "capacity"), []byte("78\n"), 0644); err != nil {
+		t.Fatalf("failed to write capacity file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(batteryDir, "status"), []byte("Discharging\n"), 0644); err != nil {
+		t.Fatalf("failed to write status file: %v", err)
+	}
+
+	origGetBatteryInfo := getBatteryInfo
+	defer func() { getBatteryInfo = origGetBatteryInfo }()
+
+	getBatteryInfo = func() (*BatteryInfo, error) {
+		return getBatteryInfoFromRoot(root)
+	}
+
+	info, err := getBatteryInfo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info == nil {
+		t.Fatal("expected battery info for SBS device, got nil")
+	}
+	if len(info.Devices) != 1 {
+		t.Fatalf("expected 1 battery device, got %d", len(info.Devices))
+	}
+
+	dev := info.Devices[0]
+	if dev.ID != "sbs-20-000b" {
+		t.Errorf("expected device ID sbs-20-000b, got %s", dev.ID)
+	}
+	if dev.Percent != 78.0 {
+		t.Errorf("expected percent 78.0, got %.1f", dev.Percent)
+	}
+}
+
+func TestGetBatteryInfo_CrosECBattery(t *testing.T) {
+	tmpDir := t.TempDir()
+	root := filepath.Join(tmpDir, "power_supply")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatalf("failed to create test dir: %v", err)
+	}
+
+	// Create a cros-ec-battery device (common on Chromebooks)
+	batteryDir := filepath.Join(root, "cros-ec-battery")
+	if err := os.MkdirAll(batteryDir, 0755); err != nil {
+		t.Fatalf("failed to create battery dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(batteryDir, "type"), []byte("Battery\n"), 0644); err != nil {
+		t.Fatalf("failed to write type file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(batteryDir, "capacity"), []byte("65\n"), 0644); err != nil {
+		t.Fatalf("failed to write capacity file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(batteryDir, "status"), []byte("Not charging\n"), 0644); err != nil {
+		t.Fatalf("failed to write status file: %v", err)
+	}
+	// Add charge-based values (common on Chrome OS)
+	if err := os.WriteFile(filepath.Join(batteryDir, "charge_now"), []byte("3500000\n"), 0644); err != nil {
+		t.Fatalf("failed to write charge_now: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(batteryDir, "charge_full"), []byte("5400000\n"), 0644); err != nil {
+		t.Fatalf("failed to write charge_full: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(batteryDir, "voltage_now"), []byte("7600000\n"), 0644); err != nil {
+		t.Fatalf("failed to write voltage_now: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(batteryDir, "cycle_count"), []byte("245\n"), 0644); err != nil {
+		t.Fatalf("failed to write cycle_count: %v", err)
+	}
+
+	origGetBatteryInfo := getBatteryInfo
+	defer func() { getBatteryInfo = origGetBatteryInfo }()
+
+	getBatteryInfo = func() (*BatteryInfo, error) {
+		return getBatteryInfoFromRoot(root)
+	}
+
+	info, err := getBatteryInfo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info == nil {
+		t.Fatal("expected battery info, got nil")
+	}
+	if len(info.Devices) != 1 {
+		t.Fatalf("expected 1 battery device, got %d", len(info.Devices))
+	}
+
+	dev := info.Devices[0]
+	if dev.ID != "cros-ec-battery" {
+		t.Errorf("expected device ID cros-ec-battery, got %s", dev.ID)
+	}
+	if dev.Percent != 65.0 {
+		t.Errorf("expected percent 65.0, got %.1f", dev.Percent)
+	}
+	// "Not charging" should normalize to "charging"
+	if dev.Status != "charging" {
+		t.Errorf("expected status charging (from 'Not charging'), got %s", dev.Status)
+	}
+	if dev.CycleCount != 245 {
+		t.Errorf("expected cycle count 245, got %d", dev.CycleCount)
+	}
+	// Check derived energy values from charge * voltage
+	// 3.5 Ah * 7.6 V = 26.6 Wh
+	expectedEnergyNow := 3.5 * 7.6
+	if dev.EnergyNowWh < expectedEnergyNow-0.1 || dev.EnergyNowWh > expectedEnergyNow+0.1 {
+		t.Errorf("expected EnergyNowWh ~%.1f, got %.3f", expectedEnergyNow, dev.EnergyNowWh)
+	}
+}
+
+func TestGetBatteryInfo_CMBBattery(t *testing.T) {
+	tmpDir := t.TempDir()
+	root := filepath.Join(tmpDir, "power_supply")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatalf("failed to create test dir: %v", err)
+	}
+
+	// Create a CMB (Common Battery) device - used by some Lenovo/Thinkpad laptops
+	batteryDir := filepath.Join(root, "CMB0")
+	if err := os.MkdirAll(batteryDir, 0755); err != nil {
+		t.Fatalf("failed to create battery dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(batteryDir, "type"), []byte("Battery\n"), 0644); err != nil {
+		t.Fatalf("failed to write type file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(batteryDir, "capacity"), []byte("88\n"), 0644); err != nil {
+		t.Fatalf("failed to write capacity file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(batteryDir, "status"), []byte("Full\n"), 0644); err != nil {
+		t.Fatalf("failed to write status file: %v", err)
+	}
+
+	origGetBatteryInfo := getBatteryInfo
+	defer func() { getBatteryInfo = origGetBatteryInfo }()
+
+	getBatteryInfo = func() (*BatteryInfo, error) {
+		return getBatteryInfoFromRoot(root)
+	}
+
+	info, err := getBatteryInfo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info == nil {
+		t.Fatal("expected battery info, got nil")
+	}
+	if len(info.Devices) != 1 {
+		t.Fatalf("expected 1 battery device, got %d", len(info.Devices))
+	}
+
+	dev := info.Devices[0]
+	if dev.ID != "CMB0" {
+		t.Errorf("expected device ID CMB0, got %s", dev.ID)
+	}
+	if dev.Status != "full" {
+		t.Errorf("expected status full, got %s", dev.Status)
+	}
+}
+
+func TestIsBatteryDevice(t *testing.T) {
+	// Create a temp dir for testing attribute-based detection
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name     string
+		devName  string
+		typ      string
+		setup    func(dir string) // optional setup for sysfs attributes
+		expected bool
+	}{
+		{"standard BAT0", "BAT0", "Battery", nil, true},
+		{"standard BAT1", "BAT1", "battery", nil, true},
+		{"BAT with empty type", "BAT0", "", nil, true},
+		{"BATT variant", "BATT", "Battery", nil, true},
+		{"CMB0", "CMB0", "Battery", nil, true},
+		{"CMB1", "CMB1", "", nil, true},
+		{"sbs-battery", "sbs-battery", "Battery", nil, true},
+		{"cros-ec-battery", "cros-ec-battery", "Battery", nil, true},
+		{"cros_ec_battery", "cros_ec_battery", "", nil, true},
+		{"cros-battery", "cros-battery", "", nil, true},
+		{"generic battery name", "my-battery", "", nil, true},
+		{"AC adapter", "ACAD", "Mains", nil, false},
+		{"AC0", "AC0", "Mains", nil, false},
+		{"USB charger", "usb-charger", "USB", nil, false},
+		{"sbs-charger", "sbs-charger", "Mains", nil, false},
+		{"random device", "hwmon0", "", nil, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := filepath.Join(tmpDir, tt.devName)
+			os.MkdirAll(dir, 0755)
+			if tt.setup != nil {
+				tt.setup(dir)
+			}
+			result := isBatteryDevice(dir, tt.devName, tt.typ)
+			if result != tt.expected {
+				t.Errorf("isBatteryDevice(%q, %q) = %v, want %v", tt.devName, tt.typ, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsBatteryDevice_AttributeBased(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Test: SBS device without type but with capacity file
+	sbsDir := filepath.Join(tmpDir, "sbs-20-000b")
+	os.MkdirAll(sbsDir, 0755)
+	os.WriteFile(filepath.Join(sbsDir, "capacity"), []byte("50\n"), 0644)
+
+	if !isBatteryDevice(sbsDir, "sbs-20-000b", "") {
+		t.Error("expected sbs-20-000b with capacity file to be detected as battery")
+	}
+
+	// Test: Unknown device with capacity+status files should be detected
+	unknownDir := filepath.Join(tmpDir, "unknown-power-device")
+	os.MkdirAll(unknownDir, 0755)
+	os.WriteFile(filepath.Join(unknownDir, "capacity"), []byte("75\n"), 0644)
+	os.WriteFile(filepath.Join(unknownDir, "status"), []byte("Discharging\n"), 0644)
+
+	if !isBatteryDevice(unknownDir, "unknown-power-device", "") {
+		t.Error("expected unknown device with capacity+status to be detected as battery")
+	}
+
+	// Test: AC-like device with capacity+status should NOT be detected
+	acLikeDir := filepath.Join(tmpDir, "ac-power")
+	os.MkdirAll(acLikeDir, 0755)
+	os.WriteFile(filepath.Join(acLikeDir, "capacity"), []byte("100\n"), 0644)
+	os.WriteFile(filepath.Join(acLikeDir, "status"), []byte("Full\n"), 0644)
+
+	if isBatteryDevice(acLikeDir, "ac-power", "") {
+		t.Error("expected ac-power device to NOT be detected as battery despite having capacity+status")
+	}
+}
+
 // getBatteryInfoFromRoot is a test helper that allows us to test getBatteryInfoImpl
-// with a custom root directory instead of the hardcoded /sys/class/power_supply
+// with a custom root directory instead of the hardcoded /sys/class/power_supply.
+// It uses the same isBatteryDevice and readBatteryDevice functions as the real implementation.
 func getBatteryInfoFromRoot(root string) (*BatteryInfo, error) {
 	ents, err := os.ReadDir(root)
 	if err != nil {
@@ -396,98 +706,13 @@ func getBatteryInfoFromRoot(root string) (*BatteryInfo, error) {
 		dir := filepath.Join(root, name)
 
 		typ, _ := readTrimmed(filepath.Join(dir, "type"))
-		typLower := strings.ToLower(typ)
-		if typLower != "battery" {
-			if typ == "" && (strings.HasPrefix(strings.ToUpper(name), "BAT") || strings.Contains(strings.ToLower(name), "battery")) {
-				// Device name suggests it's a battery, proceed
-			} else {
-				continue
-			}
+
+		if !isBatteryDevice(dir, name, typ) {
+			continue
 		}
 
-		dev := BatteryDevice{ID: name}
-
-		// Capacity (percent)
-		if capStr, err := readTrimmed(filepath.Join(dir, "capacity")); err == nil {
-			if v, err := strconv.ParseFloat(capStr, 64); err == nil {
-				if v < 0 {
-					v = 0
-				}
-				if v > 100 {
-					v = 100
-				}
-				dev.Percent = v
-			}
-		}
-
-		// Status
-		if st, err := readTrimmed(filepath.Join(dir, "status")); err == nil {
-			dev.Status = normalizeBatteryStatus(st)
-		}
-
-		// Energy / charge (sysfs uses µWh/µAh)
-		energyNowU, _ := readInt64(filepath.Join(dir, "energy_now"))
-		energyFullU, _ := readInt64(filepath.Join(dir, "energy_full"))
-		if energyNowU > 0 {
-			dev.EnergyNowWh = float64(energyNowU) / 1e6
-		}
-		if energyFullU > 0 {
-			dev.EnergyFullWh = float64(energyFullU) / 1e6
-		}
-
-		chargeNowU, _ := readInt64(filepath.Join(dir, "charge_now"))
-		chargeFullU, _ := readInt64(filepath.Join(dir, "charge_full"))
-
-		// Power / current (sysfs uses µW/µA)
-		powerNowU, _ := readInt64(filepath.Join(dir, "power_now"))
-		if powerNowU > 0 {
-			dev.PowerNowW = float64(powerNowU) / 1e6
-		}
-		currentNowU, _ := readInt64(filepath.Join(dir, "current_now"))
-
-		// Voltage (µV)
-		voltageNowU, _ := readInt64(filepath.Join(dir, "voltage_now"))
-		if voltageNowU > 0 {
-			dev.VoltageNowV = float64(voltageNowU) / 1e6
-		}
-
-		// If power_now missing but we have current and voltage, estimate power.
-		if dev.PowerNowW == 0 && currentNowU > 0 && dev.VoltageNowV > 0 {
-			currentA := float64(currentNowU) / 1e6
-			dev.PowerNowW = currentA * dev.VoltageNowV
-		}
-
-		// If energy_* missing but we have charge_* and voltage, derive Wh.
-		if dev.EnergyNowWh == 0 && chargeNowU > 0 && dev.VoltageNowV > 0 {
-			chargeAh := float64(chargeNowU) / 1e6
-			dev.EnergyNowWh = chargeAh * dev.VoltageNowV
-		}
-		if dev.EnergyFullWh == 0 && chargeFullU > 0 && dev.VoltageNowV > 0 {
-			chargeAh := float64(chargeFullU) / 1e6
-			dev.EnergyFullWh = chargeAh * dev.VoltageNowV
-		}
-
-		// Temperature
-		if tempRaw, err := readInt64(filepath.Join(dir, "temp")); err == nil && tempRaw != 0 {
-			dev.TempC = normalizeTempC(tempRaw)
-		}
-
-		// Cycle count
-		if cycles, err := readInt64(filepath.Join(dir, "cycle_count")); err == nil && cycles > 0 {
-			dev.CycleCount = cycles
-		}
-
-		// Time estimates
-		estimateBatteryTimes(&dev)
-
+		dev := readBatteryDevice(dir, name, typ)
 		devices = append(devices, dev)
-
-		// Debug log discovered battery device
-		if batteryDebugLog != nil {
-			msg := fmt.Sprintf("battery discovered: id=%s type=%s percent=%.1f status=%s energyNowWh=%.3f energyFullWh=%.3f powerNowW=%.3f voltageNowV=%.3f tempC=%.1f",
-				dev.ID, typ, dev.Percent, dev.Status, dev.EnergyNowWh, dev.EnergyFullWh, dev.PowerNowW, dev.VoltageNowV, dev.TempC)
-			batteryDebugLog(msg)
-		}
 	}
 
 	if len(devices) == 0 {

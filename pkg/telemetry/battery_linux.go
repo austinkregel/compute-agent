@@ -16,15 +16,194 @@ import (
 // The function takes a formatted message string (already formatted with fmt.Sprintf).
 var batteryDebugLog func(msg string)
 
+// isBatteryDevice checks if a power_supply device is a battery based on type file and device name.
+// This supports various Linux battery drivers including:
+// - Standard ACPI batteries (BAT0, BAT1, etc.)
+// - Chrome OS EC batteries (cros-ec-battery, sbs-battery, etc.)
+// - Smart Battery System devices (sbs-*)
+// - Generic battery devices with "battery" in the name
+func isBatteryDevice(dir, name, typ string) bool {
+	typLower := strings.ToLower(typ)
+	nameLower := strings.ToLower(name)
+	nameUpper := strings.ToUpper(name)
+
+	// Primary check: type file says "battery"
+	if typLower == "battery" {
+		return true
+	}
+
+	// Fallback checks for when type file is missing, empty, or has unusual values
+	// Check device name patterns used by various battery drivers:
+
+	// Standard ACPI battery naming: BAT0, BAT1, BATC, BATT, etc.
+	if strings.HasPrefix(nameUpper, "BAT") {
+		return true
+	}
+
+	// Chrome OS EC battery driver
+	if strings.HasPrefix(nameLower, "cros") && strings.Contains(nameLower, "battery") {
+		return true
+	}
+	if nameLower == "cros-ec-battery" || nameLower == "cros_ec_battery" {
+		return true
+	}
+
+	// Smart Battery System (SBS) batteries - common on Chromebooks and some laptops
+	if strings.HasPrefix(nameLower, "sbs") {
+		// sbs-battery, sbs-charger, etc. - only match battery variants
+		if strings.Contains(nameLower, "battery") || strings.Contains(nameLower, "bat") {
+			return true
+		}
+		// sbs-* without "charger" or "mains" is likely a battery
+		if !strings.Contains(nameLower, "charger") && !strings.Contains(nameLower, "mains") && !strings.Contains(nameLower, "ac") {
+			// Check if it has battery-like attributes (capacity file exists)
+			if _, err := os.Stat(filepath.Join(dir, "capacity")); err == nil {
+				return true
+			}
+		}
+	}
+
+	// Generic battery naming
+	if strings.Contains(nameLower, "battery") {
+		return true
+	}
+
+	// Some systems use BATT, CMB0, CMB1 (common battery), etc.
+	if strings.HasPrefix(nameUpper, "CMB") {
+		return true
+	}
+
+	// Check if type is empty but device has battery-like sysfs attributes
+	if typ == "" {
+		// If capacity file exists and status file exists, likely a battery
+		hasCapacity := false
+		hasStatus := false
+		if _, err := os.Stat(filepath.Join(dir, "capacity")); err == nil {
+			hasCapacity = true
+		}
+		if _, err := os.Stat(filepath.Join(dir, "status")); err == nil {
+			hasStatus = true
+		}
+		if hasCapacity && hasStatus {
+			// Final check: make sure it's not an AC adapter or USB power
+			if !strings.Contains(nameLower, "ac") && !strings.Contains(nameLower, "usb") &&
+				!strings.Contains(nameLower, "mains") && !strings.Contains(nameLower, "charger") {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// readBatteryDevice reads battery information from a sysfs power_supply directory.
+func readBatteryDevice(dir, name, typ string) BatteryDevice {
+	dev := BatteryDevice{ID: name}
+
+	// Capacity (percent)
+	if capStr, err := readTrimmed(filepath.Join(dir, "capacity")); err == nil {
+		if v, err := strconv.ParseFloat(capStr, 64); err == nil {
+			if v < 0 {
+				v = 0
+			}
+			if v > 100 {
+				v = 100
+			}
+			dev.Percent = v
+		}
+	}
+
+	// Status
+	if st, err := readTrimmed(filepath.Join(dir, "status")); err == nil {
+		dev.Status = normalizeBatteryStatus(st)
+	}
+
+	// Energy / charge (sysfs uses µWh/µAh)
+	// Prefer energy_*; fall back to charge_* and derive Wh if voltage available.
+	energyNowU, _ := readInt64(filepath.Join(dir, "energy_now"))
+	energyFullU, _ := readInt64(filepath.Join(dir, "energy_full"))
+	if energyNowU > 0 {
+		dev.EnergyNowWh = float64(energyNowU) / 1e6
+	}
+	if energyFullU > 0 {
+		dev.EnergyFullWh = float64(energyFullU) / 1e6
+	}
+
+	chargeNowU, _ := readInt64(filepath.Join(dir, "charge_now"))
+	chargeFullU, _ := readInt64(filepath.Join(dir, "charge_full"))
+
+	// Power / current (sysfs uses µW/µA)
+	powerNowU, _ := readInt64(filepath.Join(dir, "power_now"))
+	if powerNowU > 0 {
+		dev.PowerNowW = float64(powerNowU) / 1e6
+	}
+	currentNowU, _ := readInt64(filepath.Join(dir, "current_now"))
+
+	// Voltage (µV)
+	voltageNowU, _ := readInt64(filepath.Join(dir, "voltage_now"))
+	if voltageNowU > 0 {
+		dev.VoltageNowV = float64(voltageNowU) / 1e6
+	}
+
+	// If power_now missing but we have current and voltage, estimate power.
+	if dev.PowerNowW == 0 && currentNowU > 0 && dev.VoltageNowV > 0 {
+		currentA := float64(currentNowU) / 1e6
+		dev.PowerNowW = currentA * dev.VoltageNowV
+	}
+
+	// If energy_* missing but we have charge_* and voltage, derive Wh.
+	if dev.EnergyNowWh == 0 && chargeNowU > 0 && dev.VoltageNowV > 0 {
+		chargeAh := float64(chargeNowU) / 1e6
+		dev.EnergyNowWh = chargeAh * dev.VoltageNowV
+	}
+	if dev.EnergyFullWh == 0 && chargeFullU > 0 && dev.VoltageNowV > 0 {
+		chargeAh := float64(chargeFullU) / 1e6
+		dev.EnergyFullWh = chargeAh * dev.VoltageNowV
+	}
+
+	// Temperature (varies; often tenths of °C, sometimes milli-°C). Best-effort normalize.
+	if tempRaw, err := readInt64(filepath.Join(dir, "temp")); err == nil && tempRaw != 0 {
+		dev.TempC = normalizeTempC(tempRaw)
+	}
+
+	// Cycle count
+	if cycles, err := readInt64(filepath.Join(dir, "cycle_count")); err == nil && cycles > 0 {
+		dev.CycleCount = cycles
+	}
+
+	// Time estimates (seconds)
+	estimateBatteryTimes(&dev)
+
+	// Debug log discovered battery device
+	if batteryDebugLog != nil {
+		msg := fmt.Sprintf("battery discovered: id=%s type=%s percent=%.1f status=%s energyNowWh=%.3f energyFullWh=%.3f powerNowW=%.3f voltageNowV=%.3f tempC=%.1f cycleCount=%d",
+			dev.ID, typ, dev.Percent, dev.Status, dev.EnergyNowWh, dev.EnergyFullWh, dev.PowerNowW, dev.VoltageNowV, dev.TempC, dev.CycleCount)
+		batteryDebugLog(msg)
+	}
+
+	return dev
+}
+
 func getBatteryInfoImpl() (*BatteryInfo, error) {
 	const root = "/sys/class/power_supply"
 	ents, err := os.ReadDir(root)
 	if err != nil {
 		// If sysfs is missing (containers, unusual environments), treat as "no battery".
 		if errors.Is(err, os.ErrNotExist) {
+			if batteryDebugLog != nil {
+				batteryDebugLog("battery: /sys/class/power_supply does not exist")
+			}
 			return nil, nil
 		}
 		return nil, err
+	}
+
+	if batteryDebugLog != nil {
+		var names []string
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		batteryDebugLog(fmt.Sprintf("battery: scanning %d power_supply devices: %v", len(ents), names))
 	}
 
 	var devices []BatteryDevice
@@ -36,108 +215,22 @@ func getBatteryInfoImpl() (*BatteryInfo, error) {
 		dir := filepath.Join(root, name)
 
 		typ, _ := readTrimmed(filepath.Join(dir, "type"))
-		typLower := strings.ToLower(typ)
-		// Check if type is "battery", or if type is missing/empty, check if name suggests it's a battery
-		// (common Linux convention: BAT0, BAT1, etc.)
-		if typLower != "battery" {
-			// Fallback: if type file is missing/empty, check device name
-			if typ == "" && (strings.HasPrefix(strings.ToUpper(name), "BAT") || strings.Contains(strings.ToLower(name), "battery")) {
-				// Device name suggests it's a battery, proceed
-			} else {
-				continue
+
+		if !isBatteryDevice(dir, name, typ) {
+			if batteryDebugLog != nil {
+				batteryDebugLog(fmt.Sprintf("battery: skipping non-battery device: %s (type=%q)", name, typ))
 			}
+			continue
 		}
 
-		dev := BatteryDevice{ID: name}
-
-		// Capacity (percent)
-		if capStr, err := readTrimmed(filepath.Join(dir, "capacity")); err == nil {
-			if v, err := strconv.ParseFloat(capStr, 64); err == nil {
-				if v < 0 {
-					v = 0
-				}
-				if v > 100 {
-					v = 100
-				}
-				dev.Percent = v
-			}
-		}
-
-		// Status
-		if st, err := readTrimmed(filepath.Join(dir, "status")); err == nil {
-			dev.Status = normalizeBatteryStatus(st)
-		}
-
-		// Energy / charge (sysfs uses µWh/µAh)
-		// Prefer energy_*; fall back to charge_* and derive Wh if voltage available.
-		energyNowU, _ := readInt64(filepath.Join(dir, "energy_now"))
-		energyFullU, _ := readInt64(filepath.Join(dir, "energy_full"))
-		if energyNowU > 0 {
-			dev.EnergyNowWh = float64(energyNowU) / 1e6
-		}
-		if energyFullU > 0 {
-			dev.EnergyFullWh = float64(energyFullU) / 1e6
-		}
-
-		chargeNowU, _ := readInt64(filepath.Join(dir, "charge_now"))
-		chargeFullU, _ := readInt64(filepath.Join(dir, "charge_full"))
-
-		// Power / current (sysfs uses µW/µA)
-		powerNowU, _ := readInt64(filepath.Join(dir, "power_now"))
-		if powerNowU > 0 {
-			dev.PowerNowW = float64(powerNowU) / 1e6
-		}
-		currentNowU, _ := readInt64(filepath.Join(dir, "current_now"))
-
-		// Voltage (µV)
-		voltageNowU, _ := readInt64(filepath.Join(dir, "voltage_now"))
-		if voltageNowU > 0 {
-			dev.VoltageNowV = float64(voltageNowU) / 1e6
-		}
-
-		// If power_now missing but we have current and voltage, estimate power.
-		if dev.PowerNowW == 0 && currentNowU > 0 && dev.VoltageNowV > 0 {
-			currentA := float64(currentNowU) / 1e6
-			dev.PowerNowW = currentA * dev.VoltageNowV
-		}
-
-		// If energy_* missing but we have charge_* and voltage, derive Wh.
-		if dev.EnergyNowWh == 0 && chargeNowU > 0 && dev.VoltageNowV > 0 {
-			chargeAh := float64(chargeNowU) / 1e6
-			dev.EnergyNowWh = chargeAh * dev.VoltageNowV
-		}
-		if dev.EnergyFullWh == 0 && chargeFullU > 0 && dev.VoltageNowV > 0 {
-			chargeAh := float64(chargeFullU) / 1e6
-			dev.EnergyFullWh = chargeAh * dev.VoltageNowV
-		}
-
-		// Temperature (varies; often tenths of °C, sometimes milli-°C). Best-effort normalize.
-		if tempRaw, err := readInt64(filepath.Join(dir, "temp")); err == nil && tempRaw != 0 {
-			dev.TempC = normalizeTempC(tempRaw)
-		}
-
-		// Cycle count
-		if cycles, err := readInt64(filepath.Join(dir, "cycle_count")); err == nil && cycles > 0 {
-			dev.CycleCount = cycles
-		}
-
-		// Time estimates (seconds)
-		estimateBatteryTimes(&dev)
-
-		// Append the device if we successfully identified it as a battery.
-		// Even if we couldn't read all values (some may be 0 or empty), we should
-		// still report the battery exists. We always have at least an ID.
+		dev := readBatteryDevice(dir, name, typ)
 		devices = append(devices, dev)
-
-		// Debug log discovered battery device
-		if batteryDebugLog != nil {
-			msg := fmt.Sprintf("battery discovered: id=%s type=%s percent=%.1f status=%s energyNowWh=%.3f energyFullWh=%.3f powerNowW=%.3f voltageNowV=%.3f tempC=%.1f",
-				dev.ID, typ, dev.Percent, dev.Status, dev.EnergyNowWh, dev.EnergyFullWh, dev.PowerNowW, dev.VoltageNowV, dev.TempC)
-			batteryDebugLog(msg)
-		}
 	}
 
 	if len(devices) == 0 {
+		if batteryDebugLog != nil {
+			batteryDebugLog("battery: no battery devices found")
+		}
 		return nil, nil
 	}
 	return &BatteryInfo{Devices: devices}, nil

@@ -372,7 +372,7 @@ jobs:
           print(hmac.new(secret, body, hashlib.sha256).hexdigest())
           PY
           )
-          echo "Posting webhook to: $WEBHOOK_URL"
+          echo "Posting webhook to: $WEBHOOK_URL
           curl -fsSL -X POST \
             -H "Content-Type: application/json" \
             -H "X-Kratos-Signature: sha256=$SIG" \
