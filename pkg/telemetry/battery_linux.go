@@ -208,11 +208,21 @@ func getBatteryInfoImpl() (*BatteryInfo, error) {
 
 	var devices []BatteryDevice
 	for _, ent := range ents {
-		if !ent.IsDir() {
-			continue
-		}
 		name := ent.Name()
 		dir := filepath.Join(root, name)
+
+		// Check if entry is a directory or a symlink pointing to a directory.
+		// In /sys/class/power_supply/, entries are typically symlinks to device directories.
+		info, err := os.Stat(dir) // Stat follows symlinks, unlike Lstat
+		if err != nil {
+			if batteryDebugLog != nil {
+				batteryDebugLog(fmt.Sprintf("battery: cannot stat %s: %v", name, err))
+			}
+			continue
+		}
+		if !info.IsDir() {
+			continue
+		}
 
 		typ, _ := readTrimmed(filepath.Join(dir, "type"))
 

@@ -652,6 +652,64 @@ func TestIsBatteryDevice(t *testing.T) {
 	}
 }
 
+func TestGetBatteryInfo_SymlinkedDevice(t *testing.T) {
+	tmpDir := t.TempDir()
+	root := filepath.Join(tmpDir, "power_supply")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatalf("failed to create test dir: %v", err)
+	}
+
+	// Create the actual battery device in a different location (simulating sysfs structure)
+	actualDeviceDir := filepath.Join(tmpDir, "devices", "LNXSYSTM", "BAT1")
+	if err := os.MkdirAll(actualDeviceDir, 0755); err != nil {
+		t.Fatalf("failed to create actual device dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(actualDeviceDir, "type"), []byte("Battery\n"), 0644); err != nil {
+		t.Fatalf("failed to write type file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(actualDeviceDir, "capacity"), []byte("86\n"), 0644); err != nil {
+		t.Fatalf("failed to write capacity file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(actualDeviceDir, "status"), []byte("Discharging\n"), 0644); err != nil {
+		t.Fatalf("failed to write status file: %v", err)
+	}
+
+	// Create a symlink in power_supply pointing to the actual device (like real sysfs)
+	symlinkPath := filepath.Join(root, "BAT1")
+	if err := os.Symlink(actualDeviceDir, symlinkPath); err != nil {
+		t.Fatalf("failed to create symlink: %v", err)
+	}
+
+	origGetBatteryInfo := getBatteryInfo
+	defer func() { getBatteryInfo = origGetBatteryInfo }()
+
+	getBatteryInfo = func() (*BatteryInfo, error) {
+		return getBatteryInfoFromRoot(root)
+	}
+
+	info, err := getBatteryInfo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info == nil {
+		t.Fatal("expected battery info for symlinked device, got nil")
+	}
+	if len(info.Devices) != 1 {
+		t.Fatalf("expected 1 battery device, got %d", len(info.Devices))
+	}
+
+	dev := info.Devices[0]
+	if dev.ID != "BAT1" {
+		t.Errorf("expected device ID BAT1, got %s", dev.ID)
+	}
+	if dev.Percent != 86.0 {
+		t.Errorf("expected percent 86.0, got %.1f", dev.Percent)
+	}
+	if dev.Status != "discharging" {
+		t.Errorf("expected status discharging, got %s", dev.Status)
+	}
+}
+
 func TestIsBatteryDevice_AttributeBased(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -699,11 +757,17 @@ func getBatteryInfoFromRoot(root string) (*BatteryInfo, error) {
 
 	var devices []BatteryDevice
 	for _, ent := range ents {
-		if !ent.IsDir() {
-			continue
-		}
 		name := ent.Name()
 		dir := filepath.Join(root, name)
+
+		// Use os.Stat to follow symlinks (like the real implementation)
+		info, err := os.Stat(dir)
+		if err != nil {
+			continue
+		}
+		if !info.IsDir() {
+			continue
+		}
 
 		typ, _ := readTrimmed(filepath.Join(dir, "type"))
 
