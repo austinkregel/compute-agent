@@ -106,3 +106,9 @@ func NewStatus(running, connected bool, content Content, lastError string) Statu
 		TS:        time.Now().UTC().Format(time.RFC3339Nano),
 	}
 }
+
+// IsAvailable returns true if this binary was compiled with kiosk support.
+// Kiosk support requires CGO and platform-specific GUI libraries.
+func IsAvailable() bool {
+	return webviewAvailable
+}

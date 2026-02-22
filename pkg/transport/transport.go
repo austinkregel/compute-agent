@@ -11,15 +11,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	sio "github.com/karagenc/socket.io-go"
-	eio "github.com/karagenc/socket.io-go/engine.io"
 	"nhooyr.io/websocket"
 
 	"github.com/austinkregel/compute-agent/pkg/cmdsig"
@@ -42,8 +39,8 @@ type Config struct {
 	ServerURL         string
 	ClientID          string
 	AuthToken         string
-	Namespace         string
-	SocketPath        string
+	Namespace         string // Deprecated: ignored for plain WebSocket; kept for backward compat.
+	SocketPath        string // WebSocket endpoint path (default: "/ws/agent").
 	SkipTLSVerify     bool
 	ReconnectMin      time.Duration
 	ReconnectMax      time.Duration
@@ -69,6 +66,7 @@ type Handlers struct {
 	BackupStart   func(BackupRequest)
 	SyncKeys      func(SyncKeysRequest)
 	UpdateAgent   func(UpdateAgentRequest)
+	SwitchVariant func(SwitchVariantRequest)
 	CheckUpdates  func(CheckUpdatesRequest)
 	DirList       func(DirListRequest)
 	FilePutStart  func(FilePutStartRequest)
@@ -162,11 +160,11 @@ type DirListRequest struct {
 // DirListEntry describes a single child entry of a directory.
 type DirListEntry struct {
 	Name       string `json:"name"`
-	Type       string `json:"type"`                  // "dir" or "file"
-	Size       int64  `json:"size,omitempty"`        // optional
-	Mode       string `json:"mode,omitempty"`        // Unix permission string, e.g., "drwxr-xr-x"
-	ModTime    string `json:"modTime,omitempty"`     // RFC3339 formatted modification time
-	IsSymlink  bool   `json:"isSymlink,omitempty"`   // true if entry is a symbolic link
+	Type       string `json:"type"`                 // "dir" or "file"
+	Size       int64  `json:"size,omitempty"`       // optional
+	Mode       string `json:"mode,omitempty"`       // Unix permission string, e.g., "drwxr-xr-x"
+	ModTime    string `json:"modTime,omitempty"`    // RFC3339 formatted modification time
+	IsSymlink  bool   `json:"isSymlink,omitempty"`  // true if entry is a symbolic link
 	LinkTarget string `json:"linkTarget,omitempty"` // target path if IsSymlink is true
 }
 
@@ -191,6 +189,33 @@ type UpdateAgentRequest struct {
 	Repo string `json:"repo"`
 	Tag  string `json:"tag"`
 	At   string `json:"at"`
+	// Variant optionally specifies which variant to download ("headless" or "kiosk").
+	// If empty, the agent keeps its current variant.
+	Variant string `json:"variant,omitempty"`
+}
+
+// SwitchVariantRequest instructs the agent to switch to a different binary variant.
+type SwitchVariantRequest struct {
+	// Variant is the desired variant: "headless" or "kiosk".
+	Variant string `json:"variant"`
+	// Repo is the GitHub repository to download from.
+	Repo string `json:"repo"`
+	// Tag is the version tag to download. If empty, uses current version.
+	Tag string `json:"tag,omitempty"`
+}
+
+// VariantStatus reports the agent's current variant state.
+type VariantStatus struct {
+	// Current is the variant of the running binary.
+	Current string `json:"current"`
+	// Desired is the configured preferred variant.
+	Desired string `json:"desired"`
+	// KioskAvailable indicates if the current binary has kiosk capability.
+	KioskAvailable bool `json:"kioskAvailable"`
+	// LastSwitchError is the error from the last failed switch attempt.
+	LastSwitchError string `json:"lastSwitchError,omitempty"`
+	// LastSwitchAttempt is the RFC3339 timestamp of the last switch attempt.
+	LastSwitchAttempt string `json:"lastSwitchAttempt,omitempty"`
 }
 
 // CheckUpdatesRequest requests that the agent refresh OS update availability immediately.
@@ -205,11 +230,11 @@ type CheckUpdatesRequest struct {
 type FilePutStartRequest struct {
 	ClientID  string `json:"clientId"`
 	RequestID string `json:"requestId"`
-	Path      string `json:"path"`       // Absolute path where file should be written
-	Size      int64  `json:"size"`       // Expected total file size in bytes
-	Mode      string `json:"mode"`       // Optional permission mode, e.g., "0644"
-	Force     bool   `json:"force"`      // If true, allow writing to dangerous paths
-	Overwrite bool   `json:"overwrite"`  // If true, overwrite existing files
+	Path      string `json:"path"`      // Absolute path where file should be written
+	Size      int64  `json:"size"`      // Expected total file size in bytes
+	Mode      string `json:"mode"`      // Optional permission mode, e.g., "0644"
+	Force     bool   `json:"force"`     // If true, allow writing to dangerous paths
+	Overwrite bool   `json:"overwrite"` // If true, overwrite existing files
 }
 
 // FilePutChunk contains a chunk of file data.
@@ -295,23 +320,35 @@ type KioskSetRequest struct {
 
 // KioskStatus reports the current state of the kiosk subsystem.
 type KioskStatus struct {
-	Running     bool         `json:"running"`
-	Connected   bool         `json:"connected"`
-	Content     KioskContent `json:"content,omitempty"`
-	LastError   string       `json:"lastError,omitempty"`
-	TS          string       `json:"ts"`
+	Running   bool         `json:"running"`
+	Connected bool         `json:"connected"`
+	Content   KioskContent `json:"content,omitempty"`
+	LastError string       `json:"lastError,omitempty"`
+	TS        string       `json:"ts"`
 }
 
-// Client maintains the socket.io/WebSocket session to the control plane.
+// --- WebSocket Protocol ---
+
+// Message is the JSON envelope for all WebSocket communication.
+// Agent→Server and Server→Agent messages use this format.
+type Message struct {
+	Event string          `json:"event"`
+	Data  json.RawMessage `json:"data"`
+}
+
+// HelloAckPayload contains the session nonce for command signing.
+type HelloAckPayload struct {
+	SessionNonce string `json:"sessionNonce,omitempty"`
+}
+
+// Client maintains the WebSocket session to the control plane.
 type Client struct {
 	cfg      Config
 	log      *logging.Logger
 	handlers Handlers
 
-	baseURL *url.URL
-
-	socketMu sync.RWMutex
-	socket   sio.ClientSocket
+	connMu sync.RWMutex
+	conn   *websocket.Conn
 
 	// lastTraffic stores the unix nano timestamp of the last inbound/outbound
 	// control-plane traffic. A value of 0 means "not connected / unknown".
@@ -334,11 +371,8 @@ func New(cfg Config, log *logging.Logger, handlers Handlers) (*Client, error) {
 	if strings.TrimSpace(cfg.AuthToken) == "" {
 		return nil, errors.New("auth token is required")
 	}
-	if cfg.Namespace == "" {
-		cfg.Namespace = "/agents"
-	}
 	if cfg.SocketPath == "" {
-		cfg.SocketPath = "/socket.io"
+		cfg.SocketPath = "/ws/agent"
 	}
 	if cfg.ReconnectMin == 0 {
 		cfg.ReconnectMin = time.Second
@@ -352,16 +386,16 @@ func New(cfg Config, log *logging.Logger, handlers Handlers) (*Client, error) {
 	if cfg.PongTimeout == 0 {
 		cfg.PongTimeout = 90 * time.Second
 	}
-	baseURL, err := buildBaseURL(cfg.ServerURL, cfg.SocketPath)
-	if err != nil {
-		return nil, err
+
+	// Validate server URL
+	if _, err := url.Parse(cfg.ServerURL); err != nil {
+		return nil, fmt.Errorf("parse server URL: %w", err)
 	}
 
 	return &Client{
 		cfg:      cfg,
 		log:      log,
 		handlers: handlers,
-		baseURL:  baseURL,
 	}, nil
 }
 
@@ -369,7 +403,7 @@ func New(cfg Config, log *logging.Logger, handlers Handlers) (*Client, error) {
 func (c *Client) Run(ctx context.Context) error {
 	c.log.Info("transport loop starting",
 		"serverUrl", c.cfg.ServerURL,
-		"namespace", c.cfg.Namespace)
+		"path", c.cfg.SocketPath)
 
 	delay := c.cfg.ReconnectMin
 	for {
@@ -405,13 +439,30 @@ func (c *Client) Run(ctx context.Context) error {
 
 // Emit sends an event to the control plane.
 func (c *Client) Emit(event string, payload any) error {
-	sock := c.currentSocket()
-	if sock == nil {
+	conn := c.currentConn()
+	if conn == nil {
 		return ErrNotConnected
 	}
-	payload = ensureTypeCompat(payload)
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal payload: %w", err)
+	}
+
+	msg := Message{Event: event, Data: data}
+	out, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal message: %w", err)
+	}
+
 	c.log.Debug("emit event", "event", event)
-	sock.Emit(event, payload)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := conn.Write(ctx, websocket.MessageText, out); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
 	c.touchTraffic()
 	return nil
 }
@@ -419,118 +470,105 @@ func (c *Client) Emit(event string, payload any) error {
 func (c *Client) connectOnce(ctx context.Context) error {
 	c.helloAcked.Store(false)
 	c.lastTraffic.Store(0)
-	c.clearVerifier() // Reset signature verifier for new session
+	c.clearVerifier()
 
-	connectURL, err := c.handshakeURL()
+	wsURL, err := c.handshakeURL()
 	if err != nil {
 		return err
 	}
 
-	httpTransport := c.httpTransport()
-	httpClient := &http.Client{Transport: httpTransport}
+	httpClient := &http.Client{Transport: c.httpTransport()}
 
-	manager := sio.NewManager(connectURL, &sio.ManagerConfig{
-		NoReconnection: true,
-		EIO: eio.ClientConfig{
-			Transports:           []string{"polling", "websocket"},
-			HTTPTransport:        httpTransport,
-			WebSocketDialOptions: &websocket.DialOptions{HTTPClient: httpClient},
-		},
+	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPClient: httpClient,
 	})
-	socket := manager.Socket(c.cfg.Namespace, nil)
+	if err != nil {
+		return fmt.Errorf("websocket dial: %w", err)
+	}
 
-	done := make(chan error, 1)
+	// Set read limit to 1 MB (for file chunk messages)
+	conn.SetReadLimit(1 << 20)
 
-	manager.OnError(func(err error) {
-		select {
-		case done <- err:
-		default:
-		}
-	})
-	manager.OnClose(func(reason sio.Reason, err error) {
-		select {
-		case done <- fmt.Errorf("close: %s (%v)", reason, err):
-		default:
-		}
-	})
-
-	socket.OnConnect(func() {
-		c.log.Info("agent socket connected")
-		c.setSocket(socket)
-		c.touchTraffic()
-	})
-	socket.OnDisconnect(func(reason sio.Reason) {
-		c.log.Error("agent socket disconnected", "reason", reason)
-		c.setSocket(nil)
-		c.lastTraffic.Store(0)
-		select {
-		case done <- fmt.Errorf("disconnect: %s", reason):
-		default:
-		}
-	})
-
-	c.registerEventHandlers(socket)
-	socket.Connect()
+	c.setConn(conn)
+	c.touchTraffic()
+	c.log.Info("agent websocket connected")
 
 	stop := make(chan struct{})
 	defer close(stop)
 	go c.proactivePingLoop(ctx, stop)
 
-	select {
-	case <-ctx.Done():
-		socket.Disconnect()
-		return ctx.Err()
-	case err := <-done:
-		return err
+	err = c.readLoop(ctx, conn)
+
+	c.setConn(nil)
+	c.lastTraffic.Store(0)
+	conn.Close(websocket.StatusNormalClosure, "closing")
+
+	return err
+}
+
+// readLoop reads JSON messages from the WebSocket and dispatches them.
+func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			return fmt.Errorf("read: %w", err)
+		}
+		c.touchTraffic()
+
+		var msg Message
+		if err := json.Unmarshal(data, &msg); err != nil {
+			c.log.Error("failed to unmarshal message", "error", err)
+			continue
+		}
+
+		c.dispatchMessage(msg)
 	}
 }
 
-func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
-	// HelloAckPayload contains optional session nonce for command signing.
-	type HelloAckPayload struct {
-		SessionNonce string `json:"sessionNonce,omitempty"`
-	}
-
-	socket.OnEvent("hello_ack", func(msg HelloAckPayload) {
+// dispatchMessage routes an incoming WebSocket message to the appropriate handler.
+func (c *Client) dispatchMessage(msg Message) {
+	switch msg.Event {
+	case "hello_ack":
+		var payload HelloAckPayload
+		if err := json.Unmarshal(msg.Data, &payload); err != nil {
+			c.log.Error("failed to unmarshal hello_ack", "error", err)
+			return
+		}
 		c.helloAcked.Store(true)
-		c.touchTraffic()
 
 		// Command signing is mandatory - server MUST provide session nonce
-		if msg.SessionNonce == "" {
+		if payload.SessionNonce == "" {
 			c.log.Error("server did not provide session nonce - command signing required")
-			// Continue but commands will be rejected until we get a valid nonce
 		} else {
-			sessionKey := cmdsig.DeriveSessionKey(c.cfg.AuthToken, msg.SessionNonce)
+			sessionKey := cmdsig.DeriveSessionKey(c.cfg.AuthToken, payload.SessionNonce)
 			verifier := cmdsig.NewVerifier(sessionKey)
 			if c.cfg.MaxClockSkew > 0 {
 				verifier.SetMaxClockSkew(c.cfg.MaxClockSkew)
 			}
 			c.setVerifier(verifier)
 			c.log.Info("command signing initialized",
-				"noncePrefix", msg.SessionNonce[:8]+"...")
+				"noncePrefix", payload.SessionNonce[:8]+"...")
 		}
 
 		c.log.Debug("recv event", "event", "hello_ack")
 		if c.handlers.Hello != nil {
 			c.handlers.Hello()
 		}
-	})
 
-	socket.OnEvent("ping", func(msg struct {
-		TS int64 `json:"ts"`
-	}) {
-		c.touchTraffic()
-		c.log.Debug("recv event", "event", "ping", "ts", msg.TS)
-		_ = c.Emit("pong", map[string]int64{"ts": msg.TS})
-	})
+	case "ping":
+		var ping struct {
+			TS int64 `json:"ts"`
+		}
+		if err := json.Unmarshal(msg.Data, &ping); err != nil {
+			c.log.Error("failed to unmarshal ping", "error", err)
+			return
+		}
+		c.log.Debug("recv event", "event", "ping", "ts", ping.TS)
+		_ = c.Emit("pong", map[string]int64{"ts": ping.TS})
 
-	// Handler for signed commands from the server.
-	// This is the secure path for all security-sensitive operations.
-	socket.OnEvent("signed_command", func(rawEnvelope json.RawMessage) {
-		c.touchTraffic()
-
+	case "signed_command":
 		var envelope cmdsig.SignedEnvelope
-		if err := json.Unmarshal(rawEnvelope, &envelope); err != nil {
+		if err := json.Unmarshal(msg.Data, &envelope); err != nil {
 			c.log.Error("failed to unmarshal signed_command envelope", "error", err)
 			return
 		}
@@ -538,7 +576,6 @@ func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
 		// Verify the signature
 		if err := c.verifyCommand(&envelope); err != nil {
 			c.log.Warn("rejecting signed_command", "event", envelope.Event, "error", err)
-			// Optionally emit rejection back to server
 			_ = c.Emit("command_rejected", map[string]any{
 				"event": envelope.Event,
 				"seq":   envelope.Seq,
@@ -548,101 +585,12 @@ func (c *Client) registerEventHandlers(socket sio.ClientSocket) {
 		}
 
 		c.log.Debug("verified signed_command", "event", envelope.Event, "seq", envelope.Seq)
-
-		// Dispatch to the appropriate handler based on event type
 		c.dispatchSignedCommand(envelope.Event, envelope.Payload)
-	})
 
-	// Legacy unsigned event handlers - ALL commands must be signed, so these
-	// handlers reject unsigned commands and log a warning.
-	socket.OnEvent("admin_run", func(msg AdminCommand) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned admin_run - use signed_command")
-		// Unsigned commands are not allowed
-	})
-
-	// All commands MUST be signed. These legacy event handlers reject unsigned
-	// commands unconditionally. The server must use signed_command event.
-
-	socket.OnEvent("shell_start", func(msg ShellStart) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned shell_start - use signed_command")
-	})
-	socket.OnEvent("shell_input", func(msg ShellInput) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned shell_input - use signed_command")
-	})
-	socket.OnEvent("shell_resize", func(msg ShellResize) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned shell_resize - use signed_command")
-	})
-	socket.OnEvent("shell_close", func(msg ShellClose) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned shell_close - use signed_command")
-	})
-
-	socket.OnEvent("log_tail_start", func(msg LogTailStart) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned log_tail_start - use signed_command")
-	})
-
-	socket.OnEvent("log_tail_stop", func(msg LogTailStop) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned log_tail_stop - use signed_command")
-	})
-
-	socket.OnEvent("backup_plan", func(msg BackupRequest) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned backup_plan - use signed_command")
-	})
-	socket.OnEvent("backup_start", func(msg BackupRequest) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned backup_start - use signed_command")
-	})
-	socket.OnEvent("sync_keys", func(msg SyncKeysRequest) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned sync_keys - use signed_command")
-	})
-
-	socket.OnEvent("agent_update", func(msg UpdateAgentRequest) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned agent_update - use signed_command")
-	})
-
-	socket.OnEvent("check_updates", func(msg CheckUpdatesRequest) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned check_updates - use signed_command")
-	})
-
-	socket.OnEvent("dir_list_request", func(msg DirListRequest) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned dir_list_request - use signed_command")
-	})
-
-	socket.OnEvent("file_put_start", func(msg FilePutStartRequest) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned file_put_start - use signed_command")
-	})
-
-	socket.OnEvent("file_put_chunk", func(msg FilePutChunk) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned file_put_chunk - use signed_command")
-	})
-
-	socket.OnEvent("file_put_finish", func(msg FilePutFinishRequest) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned file_put_finish - use signed_command")
-	})
-
-	socket.OnEvent("file_delete_request", func(msg FileDeleteRequest) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned file_delete_request - use signed_command")
-	})
-
-	socket.OnEvent("file_chmod_request", func(msg FileChmodRequest) {
-		c.touchTraffic()
-		c.log.Warn("rejecting unsigned file_chmod_request - use signed_command")
-	})
+	default:
+		// Unsigned events are rejected — all commands must come via signed_command.
+		c.log.Warn("ignoring unsigned event", "event", msg.Event)
+	}
 }
 
 func (c *Client) handshakeURL() (string, error) {
@@ -652,13 +600,19 @@ func (c *Client) handshakeURL() (string, error) {
 	sum.Write([]byte(payload))
 	sig := hex.EncodeToString(sum.Sum(nil))
 
-	clone := *c.baseURL
-	q := clone.Query()
+	u, err := url.Parse(c.cfg.ServerURL)
+	if err != nil {
+		return "", fmt.Errorf("parse server URL: %w", err)
+	}
+
+	u.Path = c.cfg.SocketPath
+	q := u.Query()
 	q.Set("clientId", c.cfg.ClientID)
 	q.Set("ts", strconv.FormatInt(ts, 10))
 	q.Set("sig", sig)
-	clone.RawQuery = q.Encode()
-	return clone.String(), nil
+	u.RawQuery = q.Encode()
+
+	return u.String(), nil
 }
 
 func (c *Client) httpTransport() http.RoundTripper {
@@ -672,16 +626,16 @@ func (c *Client) httpTransport() http.RoundTripper {
 	return base
 }
 
-func (c *Client) currentSocket() sio.ClientSocket {
-	c.socketMu.RLock()
-	defer c.socketMu.RUnlock()
-	return c.socket
+func (c *Client) currentConn() *websocket.Conn {
+	c.connMu.RLock()
+	defer c.connMu.RUnlock()
+	return c.conn
 }
 
-func (c *Client) setSocket(socket sio.ClientSocket) {
-	c.socketMu.Lock()
-	defer c.socketMu.Unlock()
-	c.socket = socket
+func (c *Client) setConn(conn *websocket.Conn) {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	c.conn = conn
 }
 
 func (c *Client) touchTraffic() {
@@ -843,6 +797,16 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			c.handlers.UpdateAgent(msg)
 		}
 
+	case "switch_variant":
+		var msg SwitchVariantRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal switch_variant payload", "error", err)
+			return
+		}
+		if c.handlers.SwitchVariant != nil {
+			c.handlers.SwitchVariant(msg)
+		}
+
 	case "check_updates":
 		var msg CheckUpdatesRequest
 		if err := json.Unmarshal(payload, &msg); err != nil {
@@ -961,52 +925,10 @@ func (c *Client) proactivePingLoop(ctx context.Context, stop <-chan struct{}) {
 	}
 }
 
-func buildBaseURL(raw, socketPath string) (*url.URL, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return nil, fmt.Errorf("parse server URL: %w", err)
-	}
-	basePath := path.Clean("/" + strings.TrimPrefix(u.Path, "/"))
-	if basePath == "." {
-		basePath = ""
-	}
-	socketPath = "/" + strings.TrimPrefix(socketPath, "/")
-	finalPath := path.Join(basePath, strings.TrimPrefix(socketPath, "/"))
-	if !strings.HasSuffix(finalPath, "/") {
-		finalPath += "/"
-	}
-	u.Path = finalPath
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u, nil
-}
-
 func nextDelay(current, max time.Duration) time.Duration {
 	next := current * 2
 	if next > max {
 		return max
 	}
 	return next
-}
-
-// ensureTypeCompat ensures payloads that include `type` also include legacy `t`,
-// since the server dispatch may check `t || type` during a compatibility window.
-func ensureTypeCompat(payload any) any {
-	m, ok := payload.(map[string]any)
-	if !ok {
-		return payload
-	}
-	if _, hasT := m["t"]; hasT {
-		return payload
-	}
-	v, hasType := m["type"]
-	if !hasType {
-		return payload
-	}
-	cp := make(map[string]any, len(m)+1)
-	for k, vv := range m {
-		cp[k] = vv
-	}
-	cp["t"] = v
-	return cp
 }

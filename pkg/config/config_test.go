@@ -278,8 +278,8 @@ func TestApplyDefaults(t *testing.T) {
 	if cfg.Admin.DefaultTimeoutSec != 30 {
 		t.Errorf("expected default DefaultTimeoutSec 30, got %d", cfg.Admin.DefaultTimeoutSec)
 	}
-	if cfg.Transport.Path != "/socket.io" {
-		t.Errorf("expected default Transport.Path '/socket.io', got %q", cfg.Transport.Path)
+	if cfg.Transport.Path != "/ws/agent" {
+		t.Errorf("expected default Transport.Path '/ws/agent', got %q", cfg.Transport.Path)
 	}
 	if cfg.Logging.Level != "info" {
 		t.Errorf("expected default Logging.Level 'info', got %q", cfg.Logging.Level)

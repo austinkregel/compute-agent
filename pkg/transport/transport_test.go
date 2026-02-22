@@ -1,13 +1,23 @@
 package transport
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"nhooyr.io/websocket"
+
+	"github.com/austinkregel/compute-agent/pkg/cmdsig"
+	"github.com/austinkregel/compute-agent/pkg/logging"
 )
 
 func TestHandshakeURL(t *testing.T) {
@@ -15,18 +25,10 @@ func TestHandshakeURL(t *testing.T) {
 		ServerURL:  "https://example.com",
 		ClientID:   "test-client",
 		AuthToken:  "secret-token",
-		SocketPath: "/socket.io",
+		SocketPath: "/ws/agent",
 	}
 
-	baseURL, err := buildBaseURL(cfg.ServerURL, cfg.SocketPath)
-	if err != nil {
-		t.Fatalf("buildBaseURL: %v", err)
-	}
-
-	client := &Client{
-		cfg:     cfg,
-		baseURL: baseURL,
-	}
+	client := &Client{cfg: cfg}
 
 	urlStr, err := client.handshakeURL()
 	if err != nil {
@@ -36,6 +38,11 @@ func TestHandshakeURL(t *testing.T) {
 	u, err := url.Parse(urlStr)
 	if err != nil {
 		t.Fatalf("parse URL: %v", err)
+	}
+
+	// Check path
+	if u.Path != "/ws/agent" {
+		t.Errorf("expected path '/ws/agent', got %q", u.Path)
 	}
 
 	// Check query parameters
@@ -62,69 +69,6 @@ func TestHandshakeURL(t *testing.T) {
 
 	if sig != expectedSigHex {
 		t.Errorf("signature mismatch: got %q, expected %q", sig, expectedSigHex)
-	}
-}
-
-func TestBuildBaseURL(t *testing.T) {
-	tests := []struct {
-		name       string
-		serverURL  string
-		socketPath string
-		wantPath   string
-		wantErr    bool
-	}{
-		{
-			name:       "simple URL",
-			serverURL:  "https://example.com",
-			socketPath: "/socket.io",
-			wantPath:   "/socket.io/",
-		},
-		{
-			name:       "URL with trailing slash",
-			serverURL:  "https://example.com/",
-			socketPath: "/socket.io",
-			wantPath:   "/socket.io/",
-		},
-		{
-			name:       "URL with path",
-			serverURL:  "https://example.com/api",
-			socketPath: "/socket.io",
-			wantPath:   "/api/socket.io/",
-		},
-		{
-			name:       "socket path without leading slash",
-			serverURL:  "https://example.com",
-			socketPath: "socket.io",
-			wantPath:   "/socket.io/",
-		},
-		{
-			name:       "invalid URL",
-			serverURL:  "://invalid",
-			socketPath: "/socket.io",
-			wantErr:    true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			u, err := buildBaseURL(tt.serverURL, tt.socketPath)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("buildBaseURL() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if err != nil {
-				return
-			}
-			if u.Path != tt.wantPath {
-				t.Errorf("buildBaseURL() path = %q, want %q", u.Path, tt.wantPath)
-			}
-			if u.RawQuery != "" {
-				t.Errorf("buildBaseURL() RawQuery = %q, want empty", u.RawQuery)
-			}
-			if u.Fragment != "" {
-				t.Errorf("buildBaseURL() Fragment = %q, want empty", u.Fragment)
-			}
-		})
 	}
 }
 
@@ -189,8 +133,7 @@ func TestNew_Validation(t *testing.T) {
 				ServerURL:  "https://example.com",
 				ClientID:   "test",
 				AuthToken:  "token",
-				Namespace:  "/agents",
-				SocketPath: "/socket.io",
+				SocketPath: "/ws/agent",
 			},
 			wantErr: false,
 		},
@@ -224,7 +167,7 @@ func TestNew_Validation(t *testing.T) {
 				ServerURL:  "   ",
 				ClientID:   "test",
 				AuthToken:  "token",
-				SocketPath: "/socket.io",
+				SocketPath: "/ws/agent",
 			},
 			wantErr: true,
 		},
@@ -240,55 +183,11 @@ func TestNew_Validation(t *testing.T) {
 	}
 }
 
-func TestEnsureTypeCompat(t *testing.T) {
-	// Non-map payloads are unchanged.
-	if got := ensureTypeCompat("x"); got != "x" {
-		t.Fatalf("expected non-map payload to be unchanged, got %#v", got)
-	}
-
-	// Map without type should not gain t.
-	m1 := map[string]any{"a": 1}
-	out1Any := ensureTypeCompat(m1)
-	out1, ok := out1Any.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map, got %T", out1Any)
-	}
-	if _, hasT := out1["t"]; hasT {
-		t.Fatalf("did not expect t to be added when no type present")
-	}
-
-	// Map with t already should preserve it (and not override).
-	m2 := map[string]any{"type": "dir", "t": "legacy"}
-	out2Any := ensureTypeCompat(m2)
-	out2, ok := out2Any.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map, got %T", out2Any)
-	}
-	if out2["t"] != "legacy" {
-		t.Fatalf("expected existing t to be preserved, got %v", out2["t"])
-	}
-
-	// Map with type but without t should get a copy with t injected; original not mutated.
-	orig := map[string]any{"type": "file", "name": "x"}
-	gotAny := ensureTypeCompat(orig)
-	got, ok := gotAny.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map result, got %#v", gotAny)
-	}
-	if got["t"] != "file" {
-		t.Fatalf("expected injected t to equal type, got %#v", got["t"])
-	}
-	if _, hasT := orig["t"]; hasT {
-		t.Fatalf("did not expect original map to be mutated")
-	}
-}
-
 func TestNew_Defaults(t *testing.T) {
 	cfg := Config{
-		ServerURL:  "https://example.com",
-		ClientID:   "test",
-		AuthToken:  "token",
-		SocketPath: "",
+		ServerURL: "https://example.com",
+		ClientID:  "test",
+		AuthToken: "token",
 	}
 
 	client, err := New(cfg, nil, Handlers{})
@@ -296,11 +195,8 @@ func TestNew_Defaults(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	if client.cfg.Namespace != "/agents" {
-		t.Errorf("expected default namespace '/agents', got %q", client.cfg.Namespace)
-	}
-	if client.cfg.SocketPath != "/socket.io" {
-		t.Errorf("expected default socket path '/socket.io', got %q", client.cfg.SocketPath)
+	if client.cfg.SocketPath != "/ws/agent" {
+		t.Errorf("expected default socket path '/ws/agent', got %q", client.cfg.SocketPath)
 	}
 	if client.cfg.ReconnectMin != time.Second {
 		t.Errorf("expected default ReconnectMin 1s, got %v", client.cfg.ReconnectMin)
@@ -321,7 +217,7 @@ func TestEmit_NotConnected(t *testing.T) {
 		ServerURL:  "https://example.com",
 		ClientID:   "test",
 		AuthToken:  "token",
-		SocketPath: "/socket.io",
+		SocketPath: "/ws/agent",
 	}
 
 	client, err := New(cfg, nil, Handlers{})
@@ -335,93 +231,25 @@ func TestEmit_NotConnected(t *testing.T) {
 	}
 }
 
-func TestEnsureTypeCompat_AddsTWithoutMutatingOriginal(t *testing.T) {
-	in := map[string]any{"type": "foo", "x": 1}
-	outAny := ensureTypeCompat(in)
-	out, ok := outAny.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map payload, got %T", outAny)
-	}
-	if out["t"] != "foo" {
-		t.Fatalf("expected t to be populated from type, got %v", out["t"])
-	}
-	if _, ok := in["t"]; ok {
-		t.Fatalf("expected input map to not be mutated")
-	}
-	// Preserve other fields.
-	if out["x"] != 1 {
-		t.Fatalf("expected x to be preserved, got %v", out["x"])
-	}
-}
-
-func TestHTTPTransport_SkipTLSVerify(t *testing.T) {
-	cfg := Config{
-		ServerURL:     "https://example.com",
-		ClientID:      "test",
-		AuthToken:     "token",
-		SkipTLSVerify: true,
-	}
-
-	baseURL, _ := buildBaseURL(cfg.ServerURL, "/socket.io")
-	client := &Client{
-		cfg:     cfg,
-		baseURL: baseURL,
-	}
-
-	transport := client.httpTransport()
-	if transport == nil {
-		t.Fatal("httpTransport() returned nil")
-	}
-
-	tr, ok := transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("expected *http.Transport, got %T", transport)
-	}
-	if tr.TLSClientConfig == nil || !tr.TLSClientConfig.InsecureSkipVerify {
-		t.Fatalf("expected InsecureSkipVerify=true when SkipTLSVerify enabled")
-	}
-}
-
 func TestRegisterEventHandlers(t *testing.T) {
 	cfg := Config{
 		ServerURL:  "https://example.com",
 		ClientID:   "test",
 		AuthToken:  "token",
-		SocketPath: "/socket.io",
+		SocketPath: "/ws/agent",
 	}
 
-	handlersCalled := make(map[string]bool)
 	handlers := Handlers{
-		Hello: func() {
-			handlersCalled["hello"] = true
-		},
-		AdminRun: func(AdminCommand) {
-			handlersCalled["admin_run"] = true
-		},
-		ShellStart: func(ShellStart) {
-			handlersCalled["shell_start"] = true
-		},
-		ShellInput: func(ShellInput) {
-			handlersCalled["shell_input"] = true
-		},
-		ShellResize: func(ShellResize) {
-			handlersCalled["shell_resize"] = true
-		},
-		ShellClose: func(ShellClose) {
-			handlersCalled["shell_close"] = true
-		},
-		BackupPlan: func(BackupRequest) {
-			handlersCalled["backup_plan"] = true
-		},
-		BackupStart: func(BackupRequest) {
-			handlersCalled["backup_start"] = true
-		},
-		SyncKeys: func(SyncKeysRequest) {
-			handlersCalled["sync_keys"] = true
-		},
-		UpdateAgent: func(UpdateAgentRequest) {
-			handlersCalled["agent_update"] = true
-		},
+		Hello:         func() {},
+		AdminRun:      func(AdminCommand) {},
+		ShellStart:    func(ShellStart) {},
+		ShellInput:    func(ShellInput) {},
+		ShellResize:   func(ShellResize) {},
+		ShellClose:    func(ShellClose) {},
+		BackupPlan:    func(BackupRequest) {},
+		BackupStart:   func(BackupRequest) {},
+		SyncKeys:      func(SyncKeysRequest) {},
+		UpdateAgent:   func(UpdateAgentRequest) {},
 	}
 
 	client, err := New(cfg, nil, handlers)
@@ -429,7 +257,6 @@ func TestRegisterEventHandlers(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	// Verify handlers are set
 	if client.handlers.Hello == nil {
 		t.Error("Hello handler not set")
 	}
@@ -467,10 +294,9 @@ func TestRegisterEventHandlers_NilHandlers(t *testing.T) {
 		ServerURL:  "https://example.com",
 		ClientID:   "test",
 		AuthToken:  "token",
-		SocketPath: "/socket.io",
+		SocketPath: "/ws/agent",
 	}
 
-	// Test that nil handlers don't cause panics
 	handlers := Handlers{}
 
 	client, err := New(cfg, nil, handlers)
@@ -478,16 +304,57 @@ func TestRegisterEventHandlers_NilHandlers(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	// Should not panic with nil handlers
 	if client.handlers.Hello != nil {
 		t.Error("expected nil Hello handler")
 	}
 }
 
-func TestRun_ContextCancellation(t *testing.T) {
-	// Skip this test as it requires a real logger and would try to connect
-	// The context cancellation is tested implicitly in other integration tests
-	t.Skip("requires real logger and network connection")
+func TestHTTPTransport_SkipTLSVerify(t *testing.T) {
+	cfg := Config{
+		ServerURL:     "https://example.com",
+		ClientID:      "test",
+		AuthToken:     "token",
+		SkipTLSVerify: true,
+	}
+
+	client := &Client{cfg: cfg}
+
+	transport := client.httpTransport()
+	if transport == nil {
+		t.Fatal("httpTransport() returned nil")
+	}
+
+	tr, ok := transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", transport)
+	}
+	if tr.TLSClientConfig == nil || !tr.TLSClientConfig.InsecureSkipVerify {
+		t.Fatalf("expected InsecureSkipVerify=true when SkipTLSVerify enabled")
+	}
+}
+
+func TestHTTPTransport_NoSkipTLSVerify(t *testing.T) {
+	cfg := Config{
+		ServerURL:     "https://example.com",
+		ClientID:      "test",
+		AuthToken:     "token",
+		SkipTLSVerify: false,
+	}
+
+	client := &Client{cfg: cfg}
+
+	transport := client.httpTransport()
+	if transport == nil {
+		t.Fatal("httpTransport() returned nil")
+	}
+
+	tr, ok := transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", transport)
+	}
+	if tr.TLSClientConfig != nil && tr.TLSClientConfig.InsecureSkipVerify {
+		t.Error("expected InsecureSkipVerify=false when SkipTLSVerify is disabled")
+	}
 }
 
 func TestHandshakeURL_SignatureFormat(t *testing.T) {
@@ -495,14 +362,10 @@ func TestHandshakeURL_SignatureFormat(t *testing.T) {
 		ServerURL:  "https://example.com",
 		ClientID:   "test-client",
 		AuthToken:  "secret",
-		SocketPath: "/socket.io",
+		SocketPath: "/ws/agent",
 	}
 
-	baseURL, _ := buildBaseURL(cfg.ServerURL, cfg.SocketPath)
-	client := &Client{
-		cfg:     cfg,
-		baseURL: baseURL,
-	}
+	client := &Client{cfg: cfg}
 
 	url1, err := client.handshakeURL()
 	if err != nil {
@@ -535,7 +398,6 @@ func TestHandshakeURL_SignatureFormat(t *testing.T) {
 		t.Errorf("expected 64-char hex signature, got %d chars", len(sig2))
 	}
 
-	// Verify they're valid hex
 	if _, err := hex.DecodeString(sig1); err != nil {
 		t.Errorf("sig1 is not valid hex: %v", err)
 	}
@@ -544,152 +406,22 @@ func TestHandshakeURL_SignatureFormat(t *testing.T) {
 	}
 }
 
-func TestHTTPTransport_NoSkipTLSVerify(t *testing.T) {
-	cfg := Config{
-		ServerURL:     "https://example.com",
-		ClientID:      "test",
-		AuthToken:     "token",
-		SkipTLSVerify: false,
-	}
-
-	baseURL, _ := buildBaseURL(cfg.ServerURL, "/socket.io")
-	client := &Client{
-		cfg:     cfg,
-		baseURL: baseURL,
-	}
-
-	transport := client.httpTransport()
-	if transport == nil {
-		t.Fatal("httpTransport() returned nil")
-	}
-
-	tr, ok := transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("expected *http.Transport, got %T", transport)
-	}
-	// When SkipTLSVerify is false, TLSClientConfig may be nil or InsecureSkipVerify should be false
-	if tr.TLSClientConfig != nil && tr.TLSClientConfig.InsecureSkipVerify {
-		t.Error("expected InsecureSkipVerify=false when SkipTLSVerify is disabled")
-	}
-}
-
-func TestBuildBaseURL_MoreCases(t *testing.T) {
-	tests := []struct {
-		name       string
-		serverURL  string
-		socketPath string
-		wantPath   string
-		wantHost   string
-		wantErr    bool
-	}{
-		{
-			name:       "with port",
-			serverURL:  "https://example.com:8443",
-			socketPath: "/socket.io",
-			wantPath:   "/socket.io/",
-			wantHost:   "example.com:8443",
-		},
-		{
-			name:       "http scheme",
-			serverURL:  "http://localhost:3000",
-			socketPath: "/socket.io",
-			wantPath:   "/socket.io/",
-			wantHost:   "localhost:3000",
-		},
-		{
-			name:       "nested path",
-			serverURL:  "https://example.com/api/v1",
-			socketPath: "/ws",
-			wantPath:   "/api/v1/ws/",
-			wantHost:   "example.com",
-		},
-		{
-			name:       "double slashes in path",
-			serverURL:  "https://example.com//api//",
-			socketPath: "//socket.io//",
-			wantPath:   "/api/socket.io/",
-			wantHost:   "example.com",
-		},
-		{
-			name:       "empty path",
-			serverURL:  "https://example.com",
-			socketPath: "",
-			wantPath:   "/",
-			wantHost:   "example.com",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			u, err := buildBaseURL(tt.serverURL, tt.socketPath)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("buildBaseURL() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if err != nil {
-				return
-			}
-			if u.Path != tt.wantPath {
-				t.Errorf("buildBaseURL() path = %q, want %q", u.Path, tt.wantPath)
-			}
-			if u.Host != tt.wantHost {
-				t.Errorf("buildBaseURL() host = %q, want %q", u.Host, tt.wantHost)
-			}
-		})
-	}
-}
-
-func TestEnsureTypeCompat_VariousTypes(t *testing.T) {
-	// Test with int payload
-	if got := ensureTypeCompat(42); got != 42 {
-		t.Errorf("expected int payload unchanged, got %v", got)
-	}
-
-	// Test with slice payload
-	slice := []string{"a", "b"}
-	gotSlice := ensureTypeCompat(slice)
-	if _, ok := gotSlice.([]string); !ok {
-		t.Errorf("expected slice payload unchanged, got %T", gotSlice)
-	}
-
-	// Test with nil
-	if got := ensureTypeCompat(nil); got != nil {
-		t.Errorf("expected nil unchanged, got %v", got)
-	}
-
-	// Test with struct (not a map)
-	s := struct{ Name string }{"test"}
-	if got := ensureTypeCompat(s); got != s {
-		t.Errorf("expected struct unchanged")
-	}
-}
-
 func TestClient_TouchTraffic(t *testing.T) {
-	cfg := Config{
-		ServerURL:  "https://example.com",
-		ClientID:   "test",
-		AuthToken:  "token",
-		SocketPath: "/socket.io",
-	}
+	client := &Client{cfg: Config{
+		ServerURL: "https://example.com",
+		ClientID:  "test",
+		AuthToken: "token",
+	}}
 
-	baseURL, _ := buildBaseURL(cfg.ServerURL, cfg.SocketPath)
-	client := &Client{
-		cfg:     cfg,
-		baseURL: baseURL,
-	}
-
-	// Initially should be 0
 	if client.lastTraffic.Load() != 0 {
 		t.Error("expected initial lastTraffic to be 0")
 	}
 
-	// After touch, should be non-zero
 	client.touchTraffic()
 	if client.lastTraffic.Load() == 0 {
 		t.Error("expected lastTraffic to be set after touchTraffic()")
 	}
 
-	// Should be recent (within last second)
 	now := time.Now().UnixNano()
 	diff := now - client.lastTraffic.Load()
 	if diff < 0 || diff > int64(time.Second) {
@@ -698,48 +430,31 @@ func TestClient_TouchTraffic(t *testing.T) {
 }
 
 func TestClient_HelloAcked(t *testing.T) {
-	cfg := Config{
-		ServerURL:  "https://example.com",
-		ClientID:   "test",
-		AuthToken:  "token",
-		SocketPath: "/socket.io",
-	}
+	client := &Client{cfg: Config{
+		ServerURL: "https://example.com",
+		ClientID:  "test",
+		AuthToken: "token",
+	}}
 
-	baseURL, _ := buildBaseURL(cfg.ServerURL, cfg.SocketPath)
-	client := &Client{
-		cfg:     cfg,
-		baseURL: baseURL,
-	}
-
-	// Initially should be false
 	if client.helloAcked.Load() {
 		t.Error("expected initial helloAcked to be false")
 	}
 
-	// Set to true
 	client.helloAcked.Store(true)
 	if !client.helloAcked.Load() {
 		t.Error("expected helloAcked to be true after Store(true)")
 	}
 }
 
-func TestClient_CurrentSocket_NilWhenNotSet(t *testing.T) {
-	cfg := Config{
-		ServerURL:  "https://example.com",
-		ClientID:   "test",
-		AuthToken:  "token",
-		SocketPath: "/socket.io",
-	}
+func TestClient_CurrentConn_NilWhenNotSet(t *testing.T) {
+	client := &Client{cfg: Config{
+		ServerURL: "https://example.com",
+		ClientID:  "test",
+		AuthToken: "token",
+	}}
 
-	baseURL, _ := buildBaseURL(cfg.ServerURL, cfg.SocketPath)
-	client := &Client{
-		cfg:     cfg,
-		baseURL: baseURL,
-	}
-
-	// Should return nil when not connected
-	if sock := client.currentSocket(); sock != nil {
-		t.Error("expected nil socket when not connected")
+	if conn := client.currentConn(); conn != nil {
+		t.Error("expected nil conn when not connected")
 	}
 }
 
@@ -748,7 +463,7 @@ func TestNew_CustomTimeouts(t *testing.T) {
 		ServerURL:         "https://example.com",
 		ClientID:          "test",
 		AuthToken:         "token",
-		SocketPath:        "/socket.io",
+		SocketPath:        "/ws/agent",
 		ReconnectMin:      5 * time.Second,
 		ReconnectMax:      60 * time.Second,
 		HeartbeatInterval: 30 * time.Second,
@@ -788,10 +503,10 @@ func TestNextDelay_EdgeCases(t *testing.T) {
 			expected: 0,
 		},
 		{
-			name:     "negative current becomes zero",
+			name:     "negative current doubles",
 			current:  -1 * time.Second,
 			max:      30 * time.Second,
-			expected: -2 * time.Second, // doubles even negative
+			expected: -2 * time.Second,
 		},
 		{
 			name:     "small max",
@@ -816,6 +531,8 @@ func TestNextDelay_EdgeCases(t *testing.T) {
 		})
 	}
 }
+
+// --- Type-level tests (unchanged) ---
 
 func TestDirListEntry_Fields(t *testing.T) {
 	entry := DirListEntry{
@@ -849,8 +566,6 @@ func TestDirListRequest_Fields(t *testing.T) {
 		User:      "testuser",
 		Port:      22,
 		Protocol:  "ssh",
-		Share:     "",
-		Profile:   "",
 	}
 
 	if req.Mode != "remote" {
@@ -892,7 +607,7 @@ func TestFileDeleteRequest_Fields(t *testing.T) {
 		Recursive: true,
 	}
 
-	if req.Recursive != true {
+	if !req.Recursive {
 		t.Error("Recursive should be true")
 	}
 	if req.Force {
@@ -976,8 +691,8 @@ func TestKioskStatus_Fields(t *testing.T) {
 		Running:   true,
 		Connected: true,
 		Content: KioskContent{
-			Kind:  "url",
-			URL:   "https://example.com",
+			Kind: "url",
+			URL:  "https://example.com",
 		},
 		LastError: "",
 		TS:        "2024-01-15T10:30:00Z",
@@ -991,5 +706,529 @@ func TestKioskStatus_Fields(t *testing.T) {
 	}
 	if status.Content.Kind != "url" {
 		t.Errorf("Content.Kind = %q, want %q", status.Content.Kind, "url")
+	}
+}
+
+// --- WebSocket integration tests ---
+
+// mockWSServer creates a test WebSocket server that speaks the agent protocol.
+func mockWSServer(t *testing.T, handler func(conn *websocket.Conn)) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			InsecureSkipVerify: true,
+		})
+		if err != nil {
+			t.Logf("websocket accept error: %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		handler(conn)
+	}))
+}
+
+func testLog(t *testing.T) *logging.Logger {
+	t.Helper()
+	l, err := logging.New(logging.Options{Level: "error"})
+	if err != nil {
+		t.Fatalf("create test logger: %v", err)
+	}
+	return l
+}
+
+func sendJSON(conn *websocket.Conn, msg Message) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	return conn.Write(context.Background(), websocket.MessageText, data)
+}
+
+func TestConnectOnce_HelloAck(t *testing.T) {
+	helloCalled := make(chan struct{}, 1)
+
+	srv := mockWSServer(t, func(conn *websocket.Conn) {
+		nonce, _ := cmdsig.GenerateSessionNonce()
+		ackData, _ := json.Marshal(HelloAckPayload{SessionNonce: nonce})
+		sendJSON(conn, Message{Event: "hello_ack", Data: ackData})
+
+		// Keep connection open until client disconnects
+		for {
+			_, _, err := conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+		}
+	})
+	defer srv.Close()
+
+	cfg := Config{
+		ServerURL:  srv.URL,
+		ClientID:   "test",
+		AuthToken:  "secret",
+		SocketPath: "/ws/agent",
+	}
+
+	client := &Client{
+		cfg: cfg,
+		log: testLog(t),
+		handlers: Handlers{
+			Hello: func() {
+				helloCalled <- struct{}{}
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Run connectOnce in a goroutine (it blocks on the read loop)
+	go func() {
+		_ = client.connectOnce(ctx)
+	}()
+
+	select {
+	case <-helloCalled:
+		// Success - Hello handler was called
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for hello callback")
+	}
+
+	if !client.helloAcked.Load() {
+		t.Error("expected helloAcked to be true after hello_ack")
+	}
+
+	if client.getVerifier() == nil {
+		t.Error("expected verifier to be set after hello_ack with nonce")
+	}
+}
+
+func TestConnectOnce_PingPong(t *testing.T) {
+	pongReceived := make(chan int64, 1)
+
+	srv := mockWSServer(t, func(conn *websocket.Conn) {
+		// Send hello_ack first
+		nonce, _ := cmdsig.GenerateSessionNonce()
+		ackData, _ := json.Marshal(HelloAckPayload{SessionNonce: nonce})
+		sendJSON(conn, Message{Event: "hello_ack", Data: ackData})
+
+		// Send a ping
+		pingData, _ := json.Marshal(map[string]int64{"ts": 1234567890})
+		sendJSON(conn, Message{Event: "ping", Data: pingData})
+
+		// Read the pong response
+		_, data, err := conn.Read(context.Background())
+		if err != nil {
+			return
+		}
+		var msg Message
+		json.Unmarshal(data, &msg)
+		if msg.Event == "pong" {
+			var pong struct {
+				TS int64 `json:"ts"`
+			}
+			json.Unmarshal(msg.Data, &pong)
+			pongReceived <- pong.TS
+		}
+	})
+	defer srv.Close()
+
+	cfg := Config{
+		ServerURL:  srv.URL,
+		ClientID:   "test",
+		AuthToken:  "secret",
+		SocketPath: "/ws/agent",
+	}
+
+	client := &Client{
+		cfg:      cfg,
+		log:      testLog(t),
+		handlers: Handlers{Hello: func() {}},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = client.connectOnce(ctx)
+	}()
+
+	select {
+	case ts := <-pongReceived:
+		if ts != 1234567890 {
+			t.Errorf("expected pong ts 1234567890, got %d", ts)
+		}
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for pong")
+	}
+}
+
+func TestConnectOnce_SignedCommand(t *testing.T) {
+	shellStarted := make(chan string, 1)
+
+	srv := mockWSServer(t, func(conn *websocket.Conn) {
+		authToken := "secret"
+		nonce, _ := cmdsig.GenerateSessionNonce()
+		sessionKey := cmdsig.DeriveSessionKey(authToken, nonce)
+		signer := cmdsig.NewSigner(sessionKey)
+
+		// Send hello_ack
+		ackData, _ := json.Marshal(HelloAckPayload{SessionNonce: nonce})
+		sendJSON(conn, Message{Event: "hello_ack", Data: ackData})
+
+		// Allow a small delay for the client to process hello_ack
+		time.Sleep(50 * time.Millisecond)
+
+		// Send signed shell_start command
+		envelope, _ := signer.Sign("shell_start", map[string]string{"session": "sess-abc"})
+		envData, _ := json.Marshal(envelope)
+		sendJSON(conn, Message{Event: "signed_command", Data: envData})
+
+		// Keep alive
+		for {
+			_, _, err := conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+		}
+	})
+	defer srv.Close()
+
+	cfg := Config{
+		ServerURL:  srv.URL,
+		ClientID:   "test",
+		AuthToken:  "secret",
+		SocketPath: "/ws/agent",
+	}
+
+	client := &Client{
+		cfg: cfg,
+		log: testLog(t),
+		handlers: Handlers{
+			Hello: func() {},
+			ShellStart: func(msg ShellStart) {
+				shellStarted <- msg.Session
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = client.connectOnce(ctx)
+	}()
+
+	select {
+	case session := <-shellStarted:
+		if session != "sess-abc" {
+			t.Errorf("expected session 'sess-abc', got %q", session)
+		}
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for shell_start handler")
+	}
+}
+
+func TestConnectOnce_RejectsUnsignedCommand(t *testing.T) {
+	rejectionReceived := make(chan bool, 1)
+
+	srv := mockWSServer(t, func(conn *websocket.Conn) {
+		nonce, _ := cmdsig.GenerateSessionNonce()
+		ackData, _ := json.Marshal(HelloAckPayload{SessionNonce: nonce})
+		sendJSON(conn, Message{Event: "hello_ack", Data: ackData})
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Send an unsigned admin_run directly (should be rejected/ignored)
+		data, _ := json.Marshal(map[string]any{"cmd": map[string]string{"command": "evil"}})
+		sendJSON(conn, Message{Event: "admin_run", Data: data})
+
+		// Keep alive for a bit
+		time.Sleep(200 * time.Millisecond)
+		rejectionReceived <- true
+	})
+	defer srv.Close()
+
+	adminCalled := false
+
+	cfg := Config{
+		ServerURL:  srv.URL,
+		ClientID:   "test",
+		AuthToken:  "secret",
+		SocketPath: "/ws/agent",
+	}
+
+	client := &Client{
+		cfg: cfg,
+		log: testLog(t),
+		handlers: Handlers{
+			Hello: func() {},
+			AdminRun: func(cmd AdminCommand) {
+				adminCalled = true
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = client.connectOnce(ctx)
+	}()
+
+	select {
+	case <-rejectionReceived:
+		// Expected
+	case <-ctx.Done():
+		t.Fatal("timeout")
+	}
+
+	if adminCalled {
+		t.Error("admin handler should NOT have been called for unsigned command")
+	}
+}
+
+func TestEmit_SendsJSONEnvelope(t *testing.T) {
+	received := make(chan Message, 1)
+
+	srv := mockWSServer(t, func(conn *websocket.Conn) {
+		// Send hello_ack
+		nonce, _ := cmdsig.GenerateSessionNonce()
+		ackData, _ := json.Marshal(HelloAckPayload{SessionNonce: nonce})
+		sendJSON(conn, Message{Event: "hello_ack", Data: ackData})
+
+		// Read the first message the agent sends
+		_, data, err := conn.Read(context.Background())
+		if err != nil {
+			return
+		}
+		var msg Message
+		json.Unmarshal(data, &msg)
+		received <- msg
+	})
+	defer srv.Close()
+
+	cfg := Config{
+		ServerURL:  srv.URL,
+		ClientID:   "test",
+		AuthToken:  "secret",
+		SocketPath: "/ws/agent",
+	}
+
+	ready := make(chan struct{}, 1)
+	client := &Client{
+		cfg: cfg,
+		log: testLog(t),
+		handlers: Handlers{
+			Hello: func() {
+				ready <- struct{}{}
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = client.connectOnce(ctx)
+	}()
+
+	// Wait for connection to be established
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for connection")
+	}
+
+	// Emit a stats event
+	err := client.Emit("stats", map[string]any{"cpu": 42.5})
+	if err != nil {
+		t.Fatalf("Emit error: %v", err)
+	}
+
+	select {
+	case msg := <-received:
+		if msg.Event != "stats" {
+			t.Errorf("expected event 'stats', got %q", msg.Event)
+		}
+		var data map[string]any
+		json.Unmarshal(msg.Data, &data)
+		if data["cpu"] != 42.5 {
+			t.Errorf("expected cpu 42.5, got %v", data["cpu"])
+		}
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for emitted message")
+	}
+}
+
+func TestDispatchSignedCommand_AllEvents(t *testing.T) {
+	events := []string{
+		"admin_run", "shell_start", "shell_input", "shell_resize", "shell_close",
+		"log_tail_start", "log_tail_stop",
+		"backup_plan", "backup_start",
+		"sync_keys", "agent_update", "switch_variant", "check_updates",
+		"dir_list_request",
+		"file_put_start", "file_put_chunk", "file_put_finish",
+		"file_delete_request", "file_chmod_request",
+		"kiosk_set",
+	}
+
+	for _, event := range events {
+		t.Run(event, func(t *testing.T) {
+			called := false
+			var mu sync.Mutex
+
+			handlers := Handlers{}
+			switch event {
+			case "admin_run":
+				handlers.AdminRun = func(AdminCommand) { mu.Lock(); called = true; mu.Unlock() }
+			case "shell_start":
+				handlers.ShellStart = func(ShellStart) { mu.Lock(); called = true; mu.Unlock() }
+			case "shell_input":
+				handlers.ShellInput = func(ShellInput) { mu.Lock(); called = true; mu.Unlock() }
+			case "shell_resize":
+				handlers.ShellResize = func(ShellResize) { mu.Lock(); called = true; mu.Unlock() }
+			case "shell_close":
+				handlers.ShellClose = func(ShellClose) { mu.Lock(); called = true; mu.Unlock() }
+			case "log_tail_start":
+				handlers.LogTailStart = func(LogTailStart) { mu.Lock(); called = true; mu.Unlock() }
+			case "log_tail_stop":
+				handlers.LogTailStop = func(LogTailStop) { mu.Lock(); called = true; mu.Unlock() }
+			case "backup_plan":
+				handlers.BackupPlan = func(BackupRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "backup_start":
+				handlers.BackupStart = func(BackupRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "sync_keys":
+				handlers.SyncKeys = func(SyncKeysRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "agent_update":
+				handlers.UpdateAgent = func(UpdateAgentRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "switch_variant":
+				handlers.SwitchVariant = func(SwitchVariantRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "check_updates":
+				handlers.CheckUpdates = func(CheckUpdatesRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "dir_list_request":
+				handlers.DirList = func(DirListRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "file_put_start":
+				handlers.FilePutStart = func(FilePutStartRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "file_put_chunk":
+				handlers.FilePutChunk = func(FilePutChunk) { mu.Lock(); called = true; mu.Unlock() }
+			case "file_put_finish":
+				handlers.FilePutFinish = func(FilePutFinishRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "file_delete_request":
+				handlers.FileDelete = func(FileDeleteRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "file_chmod_request":
+				handlers.FileChmod = func(FileChmodRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "kiosk_set":
+				handlers.KioskSet = func(KioskSetRequest) { mu.Lock(); called = true; mu.Unlock() }
+			}
+
+			client := &Client{
+				cfg: Config{
+					ServerURL: "https://example.com",
+					ClientID:  "test",
+					AuthToken: "token",
+				},
+				handlers: handlers,
+			}
+
+			// Build a minimal valid payload for each event
+			payload, _ := json.Marshal(map[string]any{})
+			client.dispatchSignedCommand(event, payload)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if !called {
+				t.Errorf("handler for %q was not called", event)
+			}
+		})
+	}
+}
+
+func TestHandshakeURL_UsesSocketPath(t *testing.T) {
+	tests := []struct {
+		name       string
+		serverURL  string
+		socketPath string
+		wantPath   string
+	}{
+		{
+			name:       "default path",
+			serverURL:  "https://example.com",
+			socketPath: "/ws/agent",
+			wantPath:   "/ws/agent",
+		},
+		{
+			name:       "custom path",
+			serverURL:  "https://example.com",
+			socketPath: "/custom/ws",
+			wantPath:   "/custom/ws",
+		},
+		{
+			name:       "with port",
+			serverURL:  "https://example.com:8443",
+			socketPath: "/ws/agent",
+			wantPath:   "/ws/agent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &Client{cfg: Config{
+				ServerURL:  tt.serverURL,
+				ClientID:   "test",
+				AuthToken:  "token",
+				SocketPath: tt.socketPath,
+			}}
+
+			urlStr, err := client.handshakeURL()
+			if err != nil {
+				t.Fatalf("handshakeURL error: %v", err)
+			}
+
+			u, _ := url.Parse(urlStr)
+			if u.Path != tt.wantPath {
+				t.Errorf("path = %q, want %q", u.Path, tt.wantPath)
+			}
+		})
+	}
+}
+
+func TestMessage_JSONRoundTrip(t *testing.T) {
+	original := Message{
+		Event: "test_event",
+		Data:  json.RawMessage(`{"key":"value"}`),
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded Message
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if decoded.Event != original.Event {
+		t.Errorf("event = %q, want %q", decoded.Event, original.Event)
+	}
+	if string(decoded.Data) != string(original.Data) {
+		t.Errorf("data = %s, want %s", decoded.Data, original.Data)
+	}
+}
+
+func TestNew_InvalidServerURL(t *testing.T) {
+	cfg := Config{
+		ServerURL: "://invalid",
+		ClientID:  "test",
+		AuthToken: "token",
+	}
+
+	_, err := New(cfg, nil, Handlers{})
+	if err == nil {
+		t.Error("expected error for invalid server URL")
+	}
+	if !strings.Contains(err.Error(), "parse server URL") {
+		t.Errorf("expected parse error, got: %v", err)
 	}
 }

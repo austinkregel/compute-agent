@@ -14,13 +14,51 @@ This directory contains the Go server monitoring agent and produces a single sel
 
 ## Building
 
-```
+```bash
 cd agent
-make build          # builds ./dist/backup-agent for the host
-make build-all      # cross-compiles binaries for all supported targets
+make build          # builds ./dist/backup-agent with kiosk support (CGO_ENABLED=1)
+make build-headless # builds ./dist/backup-agent without kiosk (CGO_ENABLED=0)
+make build-all      # cross-compiles headless binaries for all supported targets
 ```
 
 Build flags are configured in `Makefile`. Cross compilation uses `CGO_ENABLED=0`; for PTY support on macOS you may need Xcode command line tools installed.
+
+## Release Artifacts
+
+The CI pipeline produces two variants for each platform/architecture combination:
+
+- **Headless**: For servers, VMs, containers, and headless environments. Built with `CGO_ENABLED=0` (no GUI dependencies).
+- **Kiosk**: For desktop/display machines with kiosk mode support. Built with `CGO_ENABLED=1` (requires GUI libraries).
+
+### Linux
+
+| Architecture | Headless | Kiosk |
+| --- | --- | --- |
+| x86_64 (amd64) | `backup-agent-linux-amd64` | `backup-agent-linux-amd64-kiosk` |
+| ARM64 | `backup-agent-linux-arm64` | `backup-agent-linux-arm64-kiosk` |
+| ARM (32-bit) | `backup-agent-linux-arm` | _(build locally)_ |
+
+**Kiosk runtime requirements**:
+```bash
+sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0  # Ubuntu/Debian
+```
+
+### macOS
+
+| Architecture | Headless | Kiosk |
+| --- | --- | --- |
+| Intel (amd64) | `backup-agent-darwin-amd64` | `backup-agent-darwin-amd64-kiosk` |
+| Apple Silicon (arm64) | `backup-agent-darwin-arm64` | `backup-agent-darwin-arm64-kiosk` |
+
+No additional runtime requirements (WebKit is included with macOS).
+
+### Windows
+
+| Architecture | Headless | Kiosk |
+| --- | --- | --- |
+| x86_64 (amd64) | `backup-agent-windows-amd64.exe` | `backup-agent-windows-amd64-kiosk.exe` |
+
+**Kiosk runtime requirements**: Microsoft Edge browser (included with Windows 10/11).
 
 ## Configuration
 
@@ -109,27 +147,21 @@ Kiosk mode enables the agent to display a fullscreen window that can be controll
 
 When enabled, the agent opens a native WebView window that displays content controlled by the dashboard.
 
-### Build Requirements
+### Which Binary to Use
 
-Kiosk mode requires CGO and platform-specific dependencies. The CI pipeline handles this automatically.
+- **Headless binary** (`backup-agent-linux-amd64`, etc.): Use for servers, VMs, containers, or any environment without a display. If kiosk is enabled in config, the agent will log a warning and continue running without kiosk functionality.
 
-| Platform | Build Requirements |
+- **Kiosk binary** (`backup-agent-linux-amd64-kiosk`, etc.): Use for machines with displays where you want kiosk functionality. Requires GUI runtime libraries on Linux.
+
+### Local Build Requirements
+
+If building locally with kiosk support (`make build`):
+
+| Platform | Build Dependencies |
 | --- | --- |
 | **Linux** | `apt install libgtk-3-dev libwebkit2gtk-4.1-dev` |
 | **macOS** | Xcode command line tools (WebKit included) |
-| **Windows** | Edge browser (uses kiosk mode) |
-
-Build with kiosk support:
-```bash
-make build  # CGO_ENABLED=1
-```
-
-Build without kiosk (headless only, for cross-compilation):
-```bash
-make build-headless  # CGO_ENABLED=0
-```
-
-If kiosk is enabled in config but the agent was built without CGO, it will log an error and continue running without kiosk.
+| **Windows** | MinGW-w64 or MSVC |
 
 ### Enabling Kiosk Mode
 

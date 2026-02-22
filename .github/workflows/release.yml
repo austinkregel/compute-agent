@@ -42,35 +42,39 @@ jobs:
       - name: Run tests
         run: make test
 
-  # Build Linux binaries with CGO for WebView/kiosk support
-  build-linux:
+  # Build headless binaries (no CGO, works on servers without GUI)
+  build-headless:
     needs: test
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     strategy:
       matrix:
         include:
-          - arch: amd64
+          - os: linux
+            arch: amd64
             goarch: amd64
-          - arch: arm64
+          - os: linux
+            arch: arm64
             goarch: arm64
+          - os: linux
+            arch: arm
+            goarch: arm
+          - os: darwin
+            arch: amd64
+            goarch: amd64
+          - os: darwin
+            arch: arm64
+            goarch: arm64
+          - os: windows
+            arch: amd64
+            goarch: amd64
+            ext: .exe
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Install WebKit dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
-
-      - name: Install cross-compilation tools
-        if: matrix.arch == 'arm64'
-        run: |
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-          sudo apt-get install -y libgtk-3-dev:arm64 libwebkit2gtk-4.1-dev:arm64 || true
 
       - name: Determine version
         id: version
@@ -94,7 +98,77 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Build Linux ${{ matrix.arch }}
+      - name: Build headless ${{ matrix.os }}-${{ matrix.arch }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          BUILD_DATE: ${{ steps.meta.outputs.build_date }}
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags "-s -w \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
+            -o "dist/backup-agent-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}" \
+            ./cmd/agent
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-agent-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/backup-agent-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+          retention-days: 1
+
+  # Build Linux kiosk binaries (with CGO for WebView support)
+  build-linux-kiosk:
+    needs: test
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            goarch: amd64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install WebKit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+            echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine build metadata
+        id: meta
+        run: |
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build Linux ${{ matrix.arch }} kiosk
         env:
           VERSION: ${{ steps.version.outputs.version }}
           SHA: ${{ steps.meta.outputs.sha }}
@@ -102,32 +176,95 @@ jobs:
           CGO_ENABLED: 1
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
-          CC: ${{ matrix.arch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
-          CXX: ${{ matrix.arch == 'arm64' && 'aarch64-linux-gnu-g++' || 'g++' }}
         run: |
           mkdir -p dist
-          # For arm64 cross-compile, fall back to CGO_ENABLED=0 if cross-deps unavailable
-          if [ "${{ matrix.arch }}" == "arm64" ]; then
-            export CGO_ENABLED=0
-          fi
           go build \
             -trimpath \
             -ldflags "-s -w \
               -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
-            -o "dist/backup-agent-linux-${{ matrix.arch }}" \
+            -o "dist/backup-agent-linux-${{ matrix.arch }}-kiosk" \
             ./cmd/agent
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: backup-agent-linux-${{ matrix.arch }}
-          path: dist/backup-agent-linux-${{ matrix.arch }}
+          name: backup-agent-linux-${{ matrix.arch }}-kiosk
+          path: dist/backup-agent-linux-${{ matrix.arch }}-kiosk
           retention-days: 1
 
-  # Build macOS binaries with CGO for WebView/kiosk support
-  build-macos:
+  # Build Linux ARM64 kiosk using native ARM64 runner
+  build-linux-arm64-kiosk:
+    needs: test
+    runs-on: ubuntu-22.04-arm
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install WebKit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+            echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine build metadata
+        id: meta
+        run: |
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build Linux arm64 kiosk
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          BUILD_DATE: ${{ steps.meta.outputs.build_date }}
+          CGO_ENABLED: 1
+          GOOS: linux
+          GOARCH: arm64
+        run: |
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags "-s -w \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
+            -o "dist/backup-agent-linux-arm64-kiosk" \
+            ./cmd/agent
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-agent-linux-arm64-kiosk
+          path: dist/backup-agent-linux-arm64-kiosk
+          retention-days: 1
+
+  # Build Linux ARM (32-bit) kiosk - skip if no native runner available
+  # Note: ARM32 kiosk builds require a native ARM32 runner which is rare
+  # Users needing ARM32 kiosk can build locally
+
+  # Build macOS kiosk binaries (with CGO for WebKit support)
+  build-macos-kiosk:
     needs: test
     runs-on: macos-latest
     permissions:
@@ -167,7 +304,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Build macOS ${{ matrix.arch }}
+      - name: Build macOS ${{ matrix.arch }} kiosk
         env:
           VERSION: ${{ steps.version.outputs.version }}
           SHA: ${{ steps.meta.outputs.sha }}
@@ -183,18 +320,18 @@ jobs:
               -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
-            -o "dist/backup-agent-darwin-${{ matrix.arch }}" \
+            -o "dist/backup-agent-darwin-${{ matrix.arch }}-kiosk" \
             ./cmd/agent
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: backup-agent-darwin-${{ matrix.arch }}
-          path: dist/backup-agent-darwin-${{ matrix.arch }}
+          name: backup-agent-darwin-${{ matrix.arch }}-kiosk
+          path: dist/backup-agent-darwin-${{ matrix.arch }}-kiosk
           retention-days: 1
 
-  # Build Windows binaries with CGO for WebView2/kiosk support
-  build-windows:
+  # Build Windows kiosk binaries (with CGO)
+  build-windows-kiosk:
     needs: test
     runs-on: windows-latest
     permissions:
@@ -229,7 +366,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Build Windows amd64
+      - name: Build Windows amd64 kiosk
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -246,19 +383,19 @@ jobs:
               -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
-            -o "dist/backup-agent-windows-amd64.exe" \
+            -o "dist/backup-agent-windows-amd64-kiosk.exe" \
             ./cmd/agent
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: backup-agent-windows-amd64
-          path: dist/backup-agent-windows-amd64.exe
+          name: backup-agent-windows-amd64-kiosk
+          path: dist/backup-agent-windows-amd64-kiosk.exe
           retention-days: 1
 
   # Collect all binaries and create release
   release:
-    needs: [build-linux, build-macos, build-windows]
+    needs: [build-headless, build-linux-kiosk, build-linux-arm64-kiosk, build-macos-kiosk, build-windows-kiosk]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -335,6 +472,37 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: Release ${{ steps.version.outputs.version }}
+          body: |
+            ## Agent Binaries
+
+            Each platform/architecture is available in two variants:
+            - **Headless**: For servers, VMs, containers, and headless environments (no GUI dependencies)
+            - **Kiosk**: For desktop/display machines with kiosk mode support (requires GUI libraries)
+
+            ### Linux
+
+            | Architecture | Headless | Kiosk |
+            | --- | --- | --- |
+            | x86_64 (amd64) | `backup-agent-linux-amd64` | `backup-agent-linux-amd64-kiosk` |
+            | ARM64 | `backup-agent-linux-arm64` | `backup-agent-linux-arm64-kiosk` |
+            | ARM (32-bit) | `backup-agent-linux-arm` | _(build locally)_ |
+
+            **Kiosk runtime requirements**: `apt install libgtk-3-0 libwebkit2gtk-4.1-0`
+
+            ### macOS
+
+            | Architecture | Headless | Kiosk |
+            | --- | --- | --- |
+            | Intel (amd64) | `backup-agent-darwin-amd64` | `backup-agent-darwin-amd64-kiosk` |
+            | Apple Silicon (arm64) | `backup-agent-darwin-arm64` | `backup-agent-darwin-arm64-kiosk` |
+
+            ### Windows
+
+            | Architecture | Headless | Kiosk |
+            | --- | --- | --- |
+            | x86_64 (amd64) | `backup-agent-windows-amd64.exe` | `backup-agent-windows-amd64-kiosk.exe` |
+
+            **Kiosk runtime requirements**: Microsoft Edge browser
           files: |
             dist/release/backup-agent*
             dist/release/checksums.txt
@@ -378,4 +546,3 @@ jobs:
             -H "X-Kratos-Signature: sha256=$SIG" \
             --data "$BODY" \
             "$WEBHOOK_URL"
-

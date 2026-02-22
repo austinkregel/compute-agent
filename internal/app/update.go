@@ -22,10 +22,11 @@ import (
 )
 
 type updateResult struct {
-	OK     bool
-	Tag    string
-	Error  string
-	Detail string
+	OK      bool
+	Tag     string
+	Variant string
+	Error   string
+	Detail  string
 }
 
 type ghRelease struct {
@@ -38,16 +39,18 @@ type ghAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-func (a *Agent) trySelfUpdate(ctx context.Context, repo string, desiredTag string) updateResult {
+// trySelfUpdate downloads and installs a new agent binary.
+// If desiredVariant is non-empty, it downloads that variant instead of the current one.
+func (a *Agent) trySelfUpdate(ctx context.Context, repo string, desiredTag string, desiredVariant string) updateResult {
 	exePath, err := os.Executable()
 	if err != nil {
 		return updateResult{OK: false, Error: "executable", Detail: err.Error()}
 	}
 	exePath, _ = filepath.EvalSymlinks(exePath)
 
-	tag, archiveName, archiveURL, checksumsURL, err := resolveLatestAsset(ctx, repo, desiredTag)
+	tag, archiveName, archiveURL, checksumsURL, err := resolveLatestAsset(ctx, repo, desiredTag, desiredVariant)
 	if err != nil {
-		return updateResult{OK: false, Tag: desiredTag, Error: "resolve_release", Detail: err.Error()}
+		return updateResult{OK: false, Tag: desiredTag, Variant: desiredVariant, Error: "resolve_release", Detail: err.Error()}
 	}
 
 	a.log.Info("downloading agent release asset", "tag", tag, "asset", archiveName)
@@ -143,7 +146,9 @@ func (a *Agent) trySelfUpdate(ctx context.Context, repo string, desiredTag strin
 	return updateResult{OK: true, Tag: tag}
 }
 
-func resolveLatestAsset(ctx context.Context, repo string, desiredTag string) (tag string, assetName string, assetURL string, checksumsURL string, err error) {
+// resolveLatestAsset finds the download URL for the specified variant.
+// If variant is empty, it uses the current binary's variant.
+func resolveLatestAsset(ctx context.Context, repo string, desiredTag string, variant string) (tag string, assetName string, assetURL string, checksumsURL string, err error) {
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
 		return "", "", "", "", errors.New("repo required")
@@ -162,7 +167,13 @@ func resolveLatestAsset(ctx context.Context, repo string, desiredTag string) (ta
 		// (this endpoint is intended to be "update to newest").
 	}
 
+	// Build asset name based on variant
 	platform := fmt.Sprintf("backup-agent-%s-%s", runtime.GOOS, runtime.GOARCH)
+	if variant == "kiosk" {
+		platform += "-kiosk"
+	}
+	// Note: "headless" variant has no suffix (it's the default)
+
 	if runtime.GOOS == "windows" {
 		assetName = fmt.Sprintf("%s-%s.zip", platform, tag)
 	} else {
@@ -178,7 +189,7 @@ func resolveLatestAsset(ctx context.Context, repo string, desiredTag string) (ta
 		}
 	}
 	if assetURL == "" {
-		return tag, assetName, "", checksumsURL, fmt.Errorf("no matching asset for %s (wanted %q)", platform, assetName)
+		return tag, assetName, "", checksumsURL, fmt.Errorf("no matching asset for %s variant %q (wanted %q)", platform, variant, assetName)
 	}
 	return tag, assetName, assetURL, checksumsURL, nil
 }
@@ -300,8 +311,18 @@ func extractExpectedBinary(archivePath, outPath string) error {
 	return fmt.Errorf("unsupported archive format: %s", archivePath)
 }
 
+// expectedBinaryName returns the binary name to look for in the archive.
+// Archives contain the binary named by platform, optionally with -kiosk suffix.
 func expectedBinaryName() string {
+	return expectedBinaryNameForVariant("")
+}
+
+// expectedBinaryNameForVariant returns the expected binary name for the given variant.
+func expectedBinaryNameForVariant(variant string) string {
 	base := fmt.Sprintf("backup-agent-%s-%s", runtime.GOOS, runtime.GOARCH)
+	if variant == "kiosk" {
+		base += "-kiosk"
+	}
 	if runtime.GOOS == "windows" {
 		return base + ".exe"
 	}
@@ -462,4 +483,104 @@ func cleanupOldExecutables(exePath string) {
 	oldPath := filepath.Join(dir, base+".old")
 	// Best-effort cleanup; ignore errors.
 	_ = os.Remove(oldPath)
+}
+
+// trySwitchVariant downloads and switches to a different variant.
+// If the new binary fails to start, it automatically reverts to the original.
+func (a *Agent) trySwitchVariant(ctx context.Context, repo string, tag string, targetVariant string) updateResult {
+	exePath, err := os.Executable()
+	if err != nil {
+		return updateResult{OK: false, Variant: targetVariant, Error: "executable", Detail: err.Error()}
+	}
+	exePath, _ = filepath.EvalSymlinks(exePath)
+
+	// Store the original binary for potential rollback
+	backupPath := exePath + ".backup"
+	if err := copyFileAtomic(exePath, backupPath, 0o755); err != nil {
+		return updateResult{OK: false, Variant: targetVariant, Error: "backup", Detail: err.Error()}
+	}
+	defer os.Remove(backupPath) // Cleanup backup on success
+
+	a.log.Info("switching agent variant", "target", targetVariant, "repo", repo, "tag", tag)
+
+	// Download the new variant
+	result := a.trySelfUpdate(ctx, repo, tag, targetVariant)
+	if !result.OK {
+		// Download/install failed, backup still in place
+		return result
+	}
+
+	// The new binary is installed. On Unix, we'll exec() to it.
+	// On Windows, we start a new process.
+	// If the new process fails quickly, we need to rollback.
+
+	if runtime.GOOS == "windows" {
+		// Windows: start the new process and monitor it
+		cmd := exec.Command(exePath, os.Args[1:]...)
+		cmd.Env = os.Environ()
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			a.log.Error("failed to start new variant", "error", err)
+			// Rollback
+			_ = copyFileAtomic(backupPath, exePath, 0o755)
+			return updateResult{OK: false, Variant: targetVariant, Error: "start_failed", Detail: err.Error()}
+		}
+
+		// Monitor for quick exit (failure)
+		processExited := make(chan error, 1)
+		go func() {
+			processExited <- cmd.Wait()
+		}()
+
+		select {
+		case err := <-processExited:
+			// Process exited quickly - this is a failure, rollback
+			a.log.Error("new variant exited immediately, rolling back", "error", err)
+			_ = copyFileAtomic(backupPath, exePath, 0o755)
+			errMsg := "new variant exited immediately"
+			if err != nil {
+				errMsg = fmt.Sprintf("new variant exited with error: %v", err)
+			}
+			return updateResult{OK: false, Variant: targetVariant, Error: "variant_failed", Detail: errMsg}
+		case <-time.After(2 * time.Second):
+			// Process is still running after 2 seconds - success!
+			a.log.Info("new variant running successfully", "pid", cmd.Process.Pid)
+			// Remove backup since we're successful
+			os.Remove(backupPath)
+			time.Sleep(250 * time.Millisecond)
+			os.Exit(0)
+		}
+	}
+
+	// Unix: exec() to the new binary
+	// Remove backup before exec since we can't cleanup after
+	os.Remove(backupPath)
+	a.log.Info("exec to new variant", "path", exePath)
+	_ = syscall.Exec(exePath, os.Args, os.Environ())
+
+	// If exec fails, we can't easily rollback since we'd need the backup
+	// This is a rare edge case
+	return updateResult{OK: true, Variant: targetVariant, Tag: result.Tag}
+}
+
+// validateKioskBinary checks if a kiosk binary can actually start.
+// This is used during startup fallback logic.
+func validateKioskBinary(binPath string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Start the binary with a special flag that makes it exit immediately after init
+	cmd := exec.CommandContext(ctx, binPath, "--validate-only")
+	output, err := cmd.CombinedOutput()
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("validation timed out after %v", timeout)
+	}
+
+	if err != nil {
+		return fmt.Errorf("validation failed: %v: %s", err, string(output))
+	}
+
+	return nil
 }

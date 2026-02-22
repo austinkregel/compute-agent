@@ -33,16 +33,41 @@ type Config struct {
 	DirBrowse      DirBrowseConfig    `json:"dirBrowse"`
 	Kiosk          KioskConfig        `json:"kiosk"`
 	Alerts         AlertsConfig       `json:"alerts"`
+	Variant        VariantConfig      `json:"variant"`
 }
 
 // KioskConfig controls the optional kiosk mode (fullscreen WebView display).
 type KioskConfig struct {
-	// Enabled starts the kiosk subsystem. Requires a build with -tags kiosk.
+	// Enabled starts the kiosk subsystem. Requires the kiosk variant binary.
 	Enabled bool `json:"enabled"`
 	// ListenAddr is the address for the local kiosk HTTP/WS server (default "127.0.0.1:0" for ephemeral port).
 	ListenAddr string `json:"listenAddr"`
 	// Fullscreen opens the WebView in fullscreen mode (default true).
 	Fullscreen bool `json:"fullscreen"`
+}
+
+// AgentVariant specifies which binary variant is running or desired.
+type AgentVariant string
+
+const (
+	// VariantHeadless is the default variant without kiosk/GUI support.
+	VariantHeadless AgentVariant = "headless"
+	// VariantKiosk is the variant with kiosk/GUI support (requires CGO and GUI libraries).
+	VariantKiosk AgentVariant = "kiosk"
+)
+
+// VariantConfig tracks the current and desired agent binary variant.
+type VariantConfig struct {
+	// Current is the variant of the currently running binary (detected at startup).
+	// This is informational and not persisted.
+	Current AgentVariant `json:"-"`
+	// Desired is the preferred variant. If different from Current, the agent will
+	// attempt to switch on the next update or when explicitly requested.
+	Desired AgentVariant `json:"desired"`
+	// LastSwitchError records the error from the most recent failed variant switch.
+	LastSwitchError string `json:"lastSwitchError,omitempty"`
+	// LastSwitchAttempt is the RFC3339 timestamp of the last switch attempt.
+	LastSwitchAttempt string `json:"lastSwitchAttempt,omitempty"`
 }
 
 // AlertsConfig controls OS-level alert monitoring (kernel panics, segfaults, OOM, etc.).
@@ -218,7 +243,7 @@ func (c *Config) applyDefaults() {
 		c.Admin.RateLimitWindowSec = 60
 	}
 	if c.Transport.Path == "" {
-		c.Transport.Path = "/socket.io"
+		c.Transport.Path = "/ws/agent"
 	}
 	if c.Transport.MaxClockSkewSec <= 0 {
 		c.Transport.MaxClockSkewSec = 300 // 5 minutes
@@ -276,6 +301,11 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Alerts.LookbackHours <= 0 {
 		c.Alerts.LookbackHours = 24
+	}
+
+	// Variant defaults: prefer headless if not specified
+	if c.Variant.Desired == "" {
+		c.Variant.Desired = VariantHeadless
 	}
 }
 

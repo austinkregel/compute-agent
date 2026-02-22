@@ -122,6 +122,7 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		BackupStart:   agent.handleBackupStart,
 		SyncKeys:      agent.handleSyncKeys,
 		UpdateAgent:   agent.handleAgentUpdate,
+		SwitchVariant: agent.handleSwitchVariant,
 		CheckUpdates:  agent.handleCheckUpdates,
 		DirList:       agent.handleDirListRequest,
 		FilePutStart:  agent.handleFilePutStart,
@@ -211,8 +212,30 @@ func (a *Agent) handleHello() {
 	if a.telemetry != nil {
 		a.telemetry.EmitNow()
 	}
+	// Emit variant status so dashboard knows what this agent is capable of
+	a.emitVariantStatus()
 	// Check for updates immediately if internet is available.
 	go a.checkForUpdatesOnConnect()
+}
+
+// emitVariantStatus sends the current variant information to the server.
+func (a *Agent) emitVariantStatus() {
+	currentVariant := "headless"
+	if kiosk.IsAvailable() {
+		currentVariant = "kiosk"
+	}
+
+	status := transport.VariantStatus{
+		Current:           currentVariant,
+		Desired:           string(a.cfg.Variant.Desired),
+		KioskAvailable:    kiosk.IsAvailable(),
+		LastSwitchError:   a.cfg.Variant.LastSwitchError,
+		LastSwitchAttempt: a.cfg.Variant.LastSwitchAttempt,
+	}
+
+	if err := a.transport.Emit("variant_status", status); err != nil {
+		a.log.Debug("failed to emit variant_status", "error", err)
+	}
 }
 
 // checkForUpdatesOnConnect checks for agent updates when connecting to the server.
@@ -232,9 +255,9 @@ func (a *Agent) checkForUpdatesOnConnect() {
 	repo := "austinkregel/compute-agent"
 
 	// Use resolveLatestAsset to check for latest version (it handles GitHub API calls)
-	// We pass empty desiredTag to get the latest release
+	// We pass empty desiredTag and variant to get the latest release for the current variant
 	// Note: resolveLatestAsset is in update.go (same package, so we can call it directly)
-	latestTag, _, _, _, err := resolveLatestAsset(ctx, repo, "")
+	latestTag, _, _, _, err := resolveLatestAsset(ctx, repo, "", "")
 	if err != nil {
 		// No internet or GitHub unavailable - silently skip
 		a.log.Debug("update check skipped", "reason", "no internet or GitHub unavailable", "error", err)
@@ -248,8 +271,8 @@ func (a *Agent) checkForUpdatesOnConnect() {
 	// Compare versions - if latest tag is different (and likely newer), trigger update
 	if latestTag != currentVersion {
 		a.log.Info("update available", "current", currentVersion, "latest", latestTag)
-		// Trigger self-update
-		result := a.trySelfUpdate(ctx, repo, latestTag)
+		// Trigger self-update, keeping the same variant
+		result := a.trySelfUpdate(ctx, repo, latestTag, "")
 		if !result.OK {
 			a.log.Warn("auto-update failed", "tag", latestTag, "error", result.Error, "detail", result.Detail)
 		}
@@ -386,18 +409,61 @@ func (a *Agent) handleAgentUpdate(msg transport.UpdateAgentRequest) {
 			repo = "austinkregel/compute-agent"
 		}
 		tag := strings.TrimSpace(msg.Tag)
+		variant := strings.TrimSpace(msg.Variant)
 
-		a.log.Info("agent update requested", "repo", repo, "tag", tag)
-		result := a.trySelfUpdate(a.ctxOrBackground(), repo, tag)
+		a.log.Info("agent update requested", "repo", repo, "tag", tag, "variant", variant)
+		result := a.trySelfUpdate(a.ctxOrBackground(), repo, tag, variant)
 
 		// Best-effort result emit. If we successfully exec() on unix, this won't run.
 		_ = a.transport.Emit("agent_update_result", map[string]any{
-			"ok":     result.OK,
-			"repo":   repo,
-			"tag":    result.Tag,
-			"error":  result.Error,
-			"detail": result.Detail,
-			"ts":     time.Now().UTC().Format(time.RFC3339Nano),
+			"ok":      result.OK,
+			"repo":    repo,
+			"tag":     result.Tag,
+			"variant": result.Variant,
+			"error":   result.Error,
+			"detail":  result.Detail,
+			"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+		})
+	}()
+}
+
+func (a *Agent) handleSwitchVariant(msg transport.SwitchVariantRequest) {
+	// Run variant switch asynchronously
+	go func() {
+		repo := strings.TrimSpace(msg.Repo)
+		if repo == "" {
+			repo = "austinkregel/compute-agent"
+		}
+		tag := strings.TrimSpace(msg.Tag)
+		if tag == "" {
+			tag = version.Version // Use current version if not specified
+		}
+		variant := strings.TrimSpace(msg.Variant)
+
+		if variant != "headless" && variant != "kiosk" {
+			a.log.Error("invalid variant requested", "variant", variant)
+			_ = a.transport.Emit("variant_switch_result", map[string]any{
+				"ok":      false,
+				"variant": variant,
+				"error":   "invalid_variant",
+				"detail":  "variant must be 'headless' or 'kiosk'",
+				"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			return
+		}
+
+		a.log.Info("variant switch requested", "repo", repo, "tag", tag, "variant", variant)
+		result := a.trySwitchVariant(a.ctxOrBackground(), repo, tag, variant)
+
+		// Best-effort result emit. If we successfully exec() on unix, this won't run.
+		_ = a.transport.Emit("variant_switch_result", map[string]any{
+			"ok":      result.OK,
+			"repo":    repo,
+			"tag":     result.Tag,
+			"variant": result.Variant,
+			"error":   result.Error,
+			"detail":  result.Detail,
+			"ts":      time.Now().UTC().Format(time.RFC3339Nano),
 		})
 	}()
 }
