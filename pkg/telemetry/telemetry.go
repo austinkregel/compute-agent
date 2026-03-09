@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -43,6 +44,10 @@ type Publisher struct {
 	updates *UpdateChecker
 	alerts  *sysalerts.Monitor
 
+	// OnSample is called with the raw JSON-encoded StatsSample after each collection.
+	// Used by the kiosk subsystem to display live stats on the dashboard view.
+	OnSample func([]byte)
+
 	warnMu          sync.Mutex
 	lastBatteryWarn time.Time
 	lastThermalWarn time.Time
@@ -53,9 +58,9 @@ type Publisher struct {
 	lastServiceCheck     time.Time
 	cachedServiceHealth  *ServiceHealth
 
-	alertsMu        sync.Mutex
-	lastAlertsScan  time.Time
-	cachedAlerts    *sysalerts.AlertSnapshot
+	alertsMu       sync.Mutex
+	lastAlertsScan time.Time
+	cachedAlerts   *sysalerts.AlertSnapshot
 }
 
 // NewPublisher creates a telemetry publisher.
@@ -374,6 +379,12 @@ func (p *Publisher) emitSample() {
 
 	if err := p.emitter.Emit("stats", map[string]any{"data": sample}); err != nil {
 		p.log.Debug("skipping stats emit (transport offline)", "error", err)
+	}
+
+	if p.OnSample != nil {
+		if raw, err := json.Marshal(sample); err == nil {
+			p.OnSample(raw)
+		}
 	}
 }
 

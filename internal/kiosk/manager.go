@@ -62,7 +62,7 @@ func New(cfg Config, log *logging.Logger, onStatus StatusFunc) (Manager, error) 
 		cfg:      cfg,
 		log:      log,
 		onStatus: onStatus,
-		content:  Content{Kind: "blank"},
+		content:  Content{Kind: "dashboard"},
 		token:    token,
 	}, nil
 }
@@ -234,6 +234,41 @@ func (m *manager) pushContent() {
 
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
 		m.log.Debug("kiosk push content failed", "error", err)
+	}
+}
+
+func (m *manager) PushStats(data json.RawMessage) {
+	m.mu.RLock()
+	kind := m.content.Kind
+	m.mu.RUnlock()
+
+	if kind != "dashboard" {
+		return
+	}
+
+	m.wsMu.Lock()
+	conn := m.wsConn
+	m.wsMu.Unlock()
+
+	if conn == nil {
+		return
+	}
+
+	msg := map[string]any{
+		"type": "stats",
+		"data": json.RawMessage(data),
+	}
+	out, err := json.Marshal(msg)
+	if err != nil {
+		m.log.Debug("kiosk stats marshal failed", "error", err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := conn.Write(ctx, websocket.MessageText, out); err != nil {
+		m.log.Debug("kiosk push stats failed", "error", err)
 	}
 }
 

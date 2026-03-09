@@ -1,9 +1,9 @@
-//go:build cgo && linux && !webkit_4_0
+//go:build cgo && linux && webkit_4_0
 
 package kiosk
 
 /*
-#cgo linux pkg-config: gtk+-3.0 webkit2gtk-4.1
+#cgo linux pkg-config: gtk+-3.0 webkit2gtk-4.0
 #cgo linux CXXFLAGS: -DWEBVIEW_GTK -std=c++11
 #cgo linux LDFLAGS: -ldl
 
@@ -97,7 +97,7 @@ func launchWebView(url string, fullscreen bool) error {
 		case 2:
 			return errors.New("failed to create GTK window")
 		case 3:
-			return errors.New("failed to create WebKit view: ensure libwebkit2gtk-4.1-0 is installed")
+			return errors.New("failed to create WebKit view: ensure libwebkit2gtk-4.0-37 is installed")
 		default:
 			return errors.New("unknown kiosk initialization error")
 		}

@@ -10,13 +10,21 @@ PLATFORMS = \
 	windows/amd64
 
 # Build for host platform with kiosk support (requires CGO + platform deps)
-# Linux: apt install libgtk-3-dev libwebkit2gtk-4.0-dev
+# Linux (Ubuntu 22.04+): apt install libgtk-3-dev libwebkit2gtk-4.1-dev
+# Linux (Ubuntu 20.04):  apt install libgtk-3-dev libwebkit2gtk-4.0-dev
+#                        then use `make build-kiosk-gtk40`
 # macOS: WebKit included by default
-# Windows: WebView2 runtime required
+# Windows: Microsoft Edge required
 .PHONY: build
 build:
 	@mkdir -p $(BINDIR)
 	CGO_ENABLED=1 go build -o $(BINDIR)/$(APP) ./cmd/agent
+
+# Build with webkit2gtk-4.0 (for Ubuntu 20.04 / Debian 11 / older distros)
+.PHONY: build-kiosk-gtk40
+build-kiosk-gtk40:
+	@mkdir -p $(BINDIR)
+	CGO_ENABLED=1 go build -tags webkit_4_0 -o $(BINDIR)/$(APP) ./cmd/agent
 
 # Build without kiosk support (no CGO, faster, cross-platform compatible)
 .PHONY: build-headless

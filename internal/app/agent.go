@@ -160,14 +160,28 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 
 	// Initialize kiosk subsystem if enabled
 	if cfg.Kiosk.Enabled {
-		kioskMgr, err := kiosk.New(kiosk.Config{
-			ListenAddr: cfg.Kiosk.ListenAddr,
-			Fullscreen: cfg.Kiosk.Fullscreen,
-		}, log.With("component", "kiosk"), agent.handleKioskStatus)
-		if err != nil {
-			return nil, fmt.Errorf("kiosk: %w", err)
+		if !kiosk.IsAvailable() {
+			log.Warn("kiosk mode requested but not available in this binary",
+				"hint", "use the kiosk variant binary (-kiosk) or rebuild with CGO_ENABLED=1")
+		} else {
+			kioskMgr, err := kiosk.New(kiosk.Config{
+				ListenAddr: cfg.Kiosk.ListenAddr,
+				Fullscreen: cfg.Kiosk.Fullscreen,
+			}, log.With("component", "kiosk"), agent.handleKioskStatus)
+			if err != nil {
+				log.Error("kiosk initialization failed", "error", err,
+					"hint", "check that required GUI libraries are installed")
+			} else {
+				agent.kiosk = kioskMgr
+			}
 		}
-		agent.kiosk = kioskMgr
+	}
+
+	// Wire telemetry stats to kiosk dashboard view
+	if agent.kiosk != nil {
+		pub.OnSample = func(raw []byte) {
+			agent.kiosk.PushStats(raw)
+		}
 	}
 
 	return agent, nil

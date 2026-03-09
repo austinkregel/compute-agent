@@ -5,6 +5,7 @@ package kiosk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strings"
@@ -26,7 +27,7 @@ var ErrWebViewFailed = errors.New("failed to create webview")
 
 // Content describes what the kiosk should display.
 type Content struct {
-	Kind  string `json:"kind"`            // "blank", "message", or "url"
+	Kind  string `json:"kind"`            // "blank", "message", "url", or "dashboard"
 	Title string `json:"title,omitempty"` // for "message" kind
 	Text  string `json:"text,omitempty"`  // for "message" kind
 	URL   string `json:"url,omitempty"`   // for "url" kind
@@ -36,6 +37,8 @@ type Content struct {
 func ValidateContent(c Content) error {
 	switch c.Kind {
 	case "blank":
+		return nil
+	case "dashboard":
 		return nil
 	case "message":
 		if len(c.Text) > 10000 {
@@ -91,6 +94,10 @@ type Manager interface {
 
 	// SetContent updates what the kiosk displays.
 	SetContent(c Content) error
+
+	// PushStats sends a telemetry stats snapshot to the kiosk page.
+	// When the kiosk is in "dashboard" mode, the page renders this data.
+	PushStats(data json.RawMessage)
 
 	// Status returns the current kiosk status.
 	Status() Status

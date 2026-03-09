@@ -12,6 +12,13 @@ func TestValidateContent_Blank(t *testing.T) {
 	}
 }
 
+func TestValidateContent_Dashboard(t *testing.T) {
+	c := Content{Kind: "dashboard"}
+	if err := ValidateContent(c); err != nil {
+		t.Errorf("dashboard content should be valid, got error: %v", err)
+	}
+}
+
 func TestValidateContent_Message(t *testing.T) {
 	tests := []struct {
 		name    string

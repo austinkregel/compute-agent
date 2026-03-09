@@ -302,10 +302,11 @@ type FileChmodResult struct {
 // KioskContent describes what the kiosk should display.
 // Kind determines which fields are used:
 //   - "blank": no additional fields
+//   - "dashboard": self-reporting system dashboard (no additional fields)
 //   - "message": Title (optional) and Text are used
 //   - "url": URL is used (must be http: or https:)
 type KioskContent struct {
-	Kind  string `json:"kind"`            // "blank", "message", or "url"
+	Kind  string `json:"kind"`            // "blank", "dashboard", "message", or "url"
 	Title string `json:"title,omitempty"` // for "message" kind
 	Text  string `json:"text,omitempty"`  // for "message" kind
 	URL   string `json:"url,omitempty"`   // for "url" kind

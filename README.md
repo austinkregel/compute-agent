@@ -40,8 +40,15 @@ The CI pipeline produces two variants for each platform/architecture combination
 
 **Kiosk runtime requirements**:
 ```bash
-sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0  # Ubuntu/Debian
+# Ubuntu 22.04+ / Debian 12+
+sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0
+
+# Ubuntu 20.04 / Debian 11 (requires special build, see below)
+sudo apt install libgtk-3-0 libwebkit2gtk-4.0-37
 ```
+
+> **Note**: The prebuilt kiosk binaries are compiled against webkit2gtk-4.1 (Ubuntu 22.04+).
+> For older distros with webkit2gtk-4.0, you need to build locally with `make build-kiosk-gtk40`.
 
 ### macOS
 
@@ -159,7 +166,8 @@ If building locally with kiosk support (`make build`):
 
 | Platform | Build Dependencies |
 | --- | --- |
-| **Linux** | `apt install libgtk-3-dev libwebkit2gtk-4.1-dev` |
+| **Linux (22.04+)** | `apt install libgtk-3-dev libwebkit2gtk-4.1-dev` |
+| **Linux (20.04)** | `apt install libgtk-3-dev libwebkit2gtk-4.0-dev` then use `make build-kiosk-gtk40` |
 | **macOS** | Xcode command line tools (WebKit included) |
 | **Windows** | MinGW-w64 or MSVC |
 
