@@ -70,6 +70,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 	"unsafe"
 )
 
@@ -78,27 +79,63 @@ const webviewAvailable = true
 
 // ensureDisplayEnv auto-detects and sets X11/Wayland environment variables
 // when the agent runs as a system service (supervisord, systemd, etc.).
-// A graphical session owned by another user requires DISPLAY + XAUTHORITY
-// (X11) or WAYLAND_DISPLAY + XDG_RUNTIME_DIR (Wayland) to be set.
+//
+// On boot the graphical session may not be ready yet (auto-login hasn't
+// completed). This function retries for up to ~90 seconds, polling every
+// 5 seconds, to give the desktop session time to start.
 func ensureDisplayEnv() {
 	// X11: fully configured
 	if os.Getenv("DISPLAY") != "" && os.Getenv("XAUTHORITY") != "" {
+		fmt.Fprintf(os.Stderr, "[kiosk] display env already set: DISPLAY=%s XAUTHORITY=%s\n",
+			os.Getenv("DISPLAY"), os.Getenv("XAUTHORITY"))
 		return
 	}
 	// Wayland: fully configured
 	if os.Getenv("WAYLAND_DISPLAY") != "" && os.Getenv("XDG_RUNTIME_DIR") != "" {
+		fmt.Fprintf(os.Stderr, "[kiosk] display env already set: WAYLAND_DISPLAY=%s XDG_RUNTIME_DIR=%s\n",
+			os.Getenv("WAYLAND_DISPLAY"), os.Getenv("XDG_RUNTIME_DIR"))
 		return
 	}
 
-	// Use loginctl to discover active graphical sessions.
+	const maxAttempts = 18 // 18 × 5s = 90s
+	const pollInterval = 5 * time.Second
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			fmt.Fprintf(os.Stderr, "[kiosk] waiting for graphical session (attempt %d/%d, next check in %s)...\n",
+				attempt, maxAttempts, pollInterval)
+			time.Sleep(pollInterval)
+		}
+
+		found := tryDetectSession()
+		if found {
+			return
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "[kiosk] FATAL: no graphical session detected after %d attempts (%s)\n",
+		maxAttempts, time.Duration(maxAttempts)*pollInterval)
+	fmt.Fprintf(os.Stderr, "[kiosk]   DISPLAY=%q XAUTHORITY=%q WAYLAND_DISPLAY=%q XDG_RUNTIME_DIR=%q\n",
+		os.Getenv("DISPLAY"), os.Getenv("XAUTHORITY"),
+		os.Getenv("WAYLAND_DISPLAY"), os.Getenv("XDG_RUNTIME_DIR"))
+	fmt.Fprintf(os.Stderr, "[kiosk]   Ensure the machine has a graphical desktop session (X11 or Wayland).\n")
+	fmt.Fprintf(os.Stderr, "[kiosk]   If using auto-login, verify the display manager is starting correctly.\n")
+}
+
+// tryDetectSession attempts to find and configure the display environment.
+// Returns true if a usable session was found.
+func tryDetectSession() bool {
+	// Strategy 1: loginctl
 	out, err := exec.Command("loginctl", "list-sessions", "--no-legend").Output()
 	if err != nil {
-		// loginctl not available; try fallback scan
-		ensureDisplayEnvFallback()
-		return
+		fmt.Fprintf(os.Stderr, "[kiosk] loginctl unavailable (%v), trying fallback detection\n", err)
+		return tryDetectSessionFallback()
 	}
 
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	fmt.Fprintf(os.Stderr, "[kiosk] loginctl found %d session(s)\n", len(lines))
+
+	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) < 3 {
 			continue
@@ -106,12 +143,12 @@ func ensureDisplayEnv() {
 		sessionID := fields[0]
 
 		propOut, err := exec.Command("loginctl", "show-session", sessionID,
-			"-p", "Type", "-p", "Display", "-p", "User", "-p", "Name").Output()
+			"-p", "Type", "-p", "Display", "-p", "User", "-p", "Name", "-p", "State", "-p", "Active").Output()
 		if err != nil {
 			continue
 		}
 
-		var sessType, display, uid, user string
+		var sessType, display, uid, user, state, active string
 		for _, prop := range strings.Split(string(propOut), "\n") {
 			parts := strings.SplitN(strings.TrimSpace(prop), "=", 2)
 			if len(parts) != 2 {
@@ -126,8 +163,15 @@ func ensureDisplayEnv() {
 				uid = parts[1]
 			case "Name":
 				user = parts[1]
+			case "State":
+				state = parts[1]
+			case "Active":
+				active = parts[1]
 			}
 		}
+
+		fmt.Fprintf(os.Stderr, "[kiosk]   session %s: type=%s user=%s(%s) display=%q state=%s active=%s\n",
+			sessionID, sessType, user, uid, display, state, active)
 
 		if sessType != "x11" && sessType != "wayland" {
 			continue
@@ -142,14 +186,11 @@ func ensureDisplayEnv() {
 				}
 			}
 			if os.Getenv("XAUTHORITY") == "" {
-				for _, candidate := range xauthorityCandidates(user, uid) {
-					if _, err := os.Stat(candidate); err == nil {
-						os.Setenv("XAUTHORITY", candidate)
-						break
-					}
-				}
+				setXauthority(user, uid)
 			}
-			return
+			fmt.Fprintf(os.Stderr, "[kiosk] detected X11 session for %s: DISPLAY=%s XAUTHORITY=%s\n",
+				user, os.Getenv("DISPLAY"), os.Getenv("XAUTHORITY"))
+			return true
 		}
 
 		// Wayland session — GTK apps use XWayland, so also set DISPLAY
@@ -167,18 +208,68 @@ func ensureDisplayEnv() {
 			os.Setenv("DISPLAY", ":0")
 		}
 		if os.Getenv("XAUTHORITY") == "" {
-			for _, candidate := range xauthorityCandidates(user, uid) {
+			setXauthority(user, uid)
+		}
+		fmt.Fprintf(os.Stderr, "[kiosk] detected Wayland session for %s: DISPLAY=%s WAYLAND_DISPLAY=%s XDG_RUNTIME_DIR=%s XAUTHORITY=%s\n",
+			user, os.Getenv("DISPLAY"), os.Getenv("WAYLAND_DISPLAY"),
+			os.Getenv("XDG_RUNTIME_DIR"), os.Getenv("XAUTHORITY"))
+		return true
+	}
+
+	return tryDetectSessionFallback()
+}
+
+func setXauthority(user, uid string) {
+	for _, candidate := range xauthorityCandidates(user, uid) {
+		if _, err := os.Stat(candidate); err == nil {
+			os.Setenv("XAUTHORITY", candidate)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "[kiosk]   tried XAUTHORITY=%s (not found)\n", candidate)
+	}
+	fmt.Fprintf(os.Stderr, "[kiosk]   WARNING: could not find .Xauthority file for user %s (uid %s)\n", user, uid)
+}
+
+// tryDetectSessionFallback scans the filesystem when loginctl is unavailable.
+func tryDetectSessionFallback() bool {
+	found := false
+
+	if os.Getenv("DISPLAY") == "" {
+		entries, err := os.ReadDir("/tmp/.X11-unix")
+		if err == nil {
+			for _, e := range entries {
+				name := e.Name()
+				if strings.HasPrefix(name, "X") {
+					d := ":" + name[1:]
+					fmt.Fprintf(os.Stderr, "[kiosk] fallback: found X socket %s → DISPLAY=%s\n", name, d)
+					os.Setenv("DISPLAY", d)
+					found = true
+					break
+				}
+			}
+		}
+	} else {
+		found = true
+	}
+
+	if os.Getenv("DISPLAY") != "" && os.Getenv("XAUTHORITY") == "" {
+		homes, err := os.ReadDir("/home")
+		if err == nil {
+			for _, h := range homes {
+				if !h.IsDir() {
+					continue
+				}
+				candidate := filepath.Join("/home", h.Name(), ".Xauthority")
 				if _, err := os.Stat(candidate); err == nil {
+					fmt.Fprintf(os.Stderr, "[kiosk] fallback: found XAUTHORITY=%s\n", candidate)
 					os.Setenv("XAUTHORITY", candidate)
 					break
 				}
 			}
 		}
-		return
 	}
 
-	// No graphical session found via loginctl; try fallback
-	ensureDisplayEnvFallback()
+	return found && os.Getenv("DISPLAY") != "" && os.Getenv("XAUTHORITY") != ""
 }
 
 // xauthorityCandidates returns paths where .Xauthority commonly lives.
@@ -194,40 +285,6 @@ func xauthorityCandidates(user, uid string) []string {
 		)
 	}
 	return out
-}
-
-// ensureDisplayEnvFallback scans common locations when loginctl is unavailable.
-func ensureDisplayEnvFallback() {
-	if os.Getenv("DISPLAY") == "" {
-		// Check for X sockets in /tmp/.X11-unix
-		entries, err := os.ReadDir("/tmp/.X11-unix")
-		if err == nil {
-			for _, e := range entries {
-				name := e.Name()
-				if strings.HasPrefix(name, "X") {
-					os.Setenv("DISPLAY", ":"+name[1:])
-					break
-				}
-			}
-		}
-	}
-
-	if os.Getenv("DISPLAY") != "" && os.Getenv("XAUTHORITY") == "" {
-		// Scan /home/*/.Xauthority
-		homes, err := os.ReadDir("/home")
-		if err == nil {
-			for _, h := range homes {
-				if !h.IsDir() {
-					continue
-				}
-				candidate := filepath.Join("/home", h.Name(), ".Xauthority")
-				if _, err := os.Stat(candidate); err == nil {
-					os.Setenv("XAUTHORITY", candidate)
-					return
-				}
-			}
-		}
-	}
 }
 
 // launchWebView opens a WebView window pointing to the given URL.

@@ -111,12 +111,19 @@ func (m *manager) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		m.log.Info("kiosk shutting down")
 	case err := <-webviewDone:
+		// Shutdown HTTP server before returning
+		shutdownCtx, shutCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer shutCancel()
+		_ = m.server.Shutdown(shutdownCtx)
+
 		if err != nil {
-			m.log.Error("webview error", "error", err)
+			m.log.Error("FATAL: kiosk webview failed — the agent will exit so the service manager can restart it",
+				"error", err)
 			m.setError(err.Error())
-		} else {
-			m.log.Info("kiosk webview closed")
+			return fmt.Errorf("kiosk webview: %w", err)
 		}
+		m.log.Info("kiosk webview closed")
+		return nil
 	case err := <-serverErr:
 		if err != nil {
 			m.log.Error("kiosk server error", "error", err)
