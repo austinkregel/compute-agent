@@ -282,16 +282,15 @@ func (a *Agent) checkForUpdatesOnConnect() {
 		return
 	}
 
-	// Compare versions - if latest tag is different (and likely newer), trigger update
-	if latestTag != currentVersion {
-		a.log.Info("update available", "current", currentVersion, "latest", latestTag)
-		// Trigger self-update, keeping the same variant
-		result := a.trySelfUpdate(ctx, repo, latestTag, "")
-		if !result.OK {
-			a.log.Warn("auto-update failed", "tag", latestTag, "error", result.Error, "detail", result.Detail)
-		}
-	} else {
+	if !version.IsNewer(latestTag, currentVersion) {
 		a.log.Debug("agent is up to date", "version", currentVersion)
+		return
+	}
+
+	a.log.Info("update available", "current", currentVersion, "latest", latestTag)
+	result := a.trySelfUpdate(ctx, repo, latestTag, "")
+	if !result.OK {
+		a.log.Warn("auto-update failed", "tag", latestTag, "error", result.Error, "detail", result.Detail)
 	}
 }
 
