@@ -944,6 +944,7 @@ func (a *Agent) handleKioskSet(msg transport.KioskSetRequest) {
 		Text:   msg.Content.Text,
 		URL:    msg.Content.URL,
 		Layout: msg.Content.Layout,
+		Units:  msg.Content.Units,
 	}
 	for _, w := range msg.Content.Widgets {
 		content.Widgets = append(content.Widgets, kiosk.WidgetPlacement{
@@ -968,7 +969,7 @@ func (a *Agent) handleKioskSaveLayout(msg transport.KioskSaveLayoutRequest) {
 		return
 	}
 
-	layout := kiosk.PageLayout{Cols: msg.Cols, Rows: msg.Rows}
+	layout := kiosk.PageLayout{Cols: msg.Cols, Rows: msg.Rows, Units: msg.Units}
 	for _, w := range msg.Widgets {
 		layout.Widgets = append(layout.Widgets, kiosk.WidgetPlacement{
 			Type: w.Type, Col: w.Col, Row: w.Row, W: w.W, H: w.H, Config: w.Config,

@@ -90,6 +90,7 @@ type Content struct {
 	URL     string            `json:"url,omitempty"`     // for "url" kind
 	Layout  string            `json:"layout,omitempty"`  // for "page" kind
 	Widgets []WidgetPlacement `json:"widgets,omitempty"` // for "page" kind
+	Units   string            `json:"units,omitempty"`   // "imperial" or "metric" (default "imperial")
 }
 
 // ValidateContent checks that the content is well-formed and safe.
@@ -170,6 +171,7 @@ type PageLayout struct {
 	Cols    int               `json:"cols"`
 	Rows    int               `json:"rows"`
 	Widgets []WidgetPlacement `json:"widgets"`
+	Units   string            `json:"units,omitempty"` // "imperial" or "metric"
 }
 
 // Manager controls the kiosk subsystem lifecycle.

@@ -435,12 +435,12 @@ jobs:
           cd dist
           mkdir -p release
           VERSION="${{ steps.version.outputs.version }}"
+          # Restore executable bit lost during artifact upload/download
+          find . -maxdepth 1 -name 'backup-agent-*' ! -name '*.exe' -exec chmod +x {} \;
           for file in backup-agent-*; do
             if [[ "$file" == *.exe ]]; then
-              # Windows executable
               zip "release/${file%.exe}-${VERSION}.zip" "$file"
             else
-              # Unix executable
               tar -czf "release/${file}-${VERSION}.tar.gz" "$file"
             fi
           done

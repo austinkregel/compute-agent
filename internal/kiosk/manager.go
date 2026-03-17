@@ -227,10 +227,15 @@ func (m *manager) SetContent(c Content) error {
 		return err
 	}
 
-	// For page kind, resolve widget placements from store if not provided.
-	if c.Kind == "page" && len(c.Widgets) == 0 && m.layoutStore != nil {
+	// For page kind, resolve widget placements and units from store if not provided.
+	if c.Kind == "page" && m.layoutStore != nil {
 		if layout, ok := m.layoutStore.Get(c.Layout); ok {
-			c.Widgets = layout.Widgets
+			if len(c.Widgets) == 0 {
+				c.Widgets = layout.Widgets
+			}
+			if c.Units == "" && layout.Units != "" {
+				c.Units = layout.Units
+			}
 		}
 	}
 

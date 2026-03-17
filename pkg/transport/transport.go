@@ -325,6 +325,7 @@ type KioskContent struct {
 	URL     string                 `json:"url,omitempty"`     // for "url" kind
 	Layout  string                 `json:"layout,omitempty"`  // for "page" kind
 	Widgets []KioskWidgetPlacement `json:"widgets,omitempty"` // for "page" kind
+	Units   string                 `json:"units,omitempty"`   // "imperial" or "metric"
 }
 
 // KioskSetRequest is the signed command payload for setting kiosk content.
@@ -340,6 +341,7 @@ type KioskSaveLayoutRequest struct {
 	Cols    int                    `json:"cols"`
 	Rows    int                    `json:"rows"`
 	Widgets []KioskWidgetPlacement `json:"widgets"`
+	Units   string                 `json:"units,omitempty"` // "imperial" or "metric"
 	TS      string                 `json:"ts,omitempty"`
 }
 

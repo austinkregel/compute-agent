@@ -425,7 +425,7 @@
                     break;
                 case 'page':
                     pageEl.style.display = 'block';
-                    initPage(content.layout, content.widgets || []);
+                    initPage(content.layout, content.widgets || [], content.units || 'imperial');
                     break;
                 case 'dashboard':
                 default:
@@ -524,7 +524,10 @@
             'ambient-photo': { label: '', init: initAmbientPhoto },
         };
 
-        function initPage(layout, widgets) {
+        var pageUnits = 'imperial';
+
+        function initPage(layout, widgets, units) {
+            pageUnits = (units === 'metric') ? 'metric' : 'imperial';
             const grid = document.getElementById('page-grid');
             grid.innerHTML = '';
             pageWidgets = [];
@@ -602,8 +605,12 @@
             inst.el.innerHTML = '<div class="wc-sub">Loading weather\u2026</div>';
             async function fetchWeather() {
                 const loc = inst.config.lat ? { lat: inst.config.lat, lon: inst.config.lon, city: inst.config.city || '' } : await getLocation();
+                const imperial = pageUnits !== 'metric';
+                const unitParams = imperial
+                    ? 'temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch'
+                    : 'temperature_unit=celsius&wind_speed_unit=kmh&precipitation_unit=mm';
                 try {
-                    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,surface_pressure&timezone=auto`);
+                    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,surface_pressure&${unitParams}&timezone=auto`);
                     const d = await r.json();
                     const cur = d.current;
                     const temp = Math.round(cur.temperature_2m);
@@ -611,6 +618,10 @@
                     const wcode = cur.weather_code;
                     const WMO_LABELS = {0:'Clear Sky',1:'Mainly Clear',2:'Partly Cloudy',3:'Overcast',45:'Foggy',48:'Rime Fog',51:'Light Drizzle',53:'Drizzle',55:'Dense Drizzle',61:'Light Rain',63:'Rain',65:'Heavy Rain',71:'Light Snow',73:'Snow',75:'Heavy Snow',77:'Snow Grains',80:'Light Showers',81:'Showers',82:'Heavy Showers',85:'Light Snow Showers',86:'Snow Showers',95:'Thunderstorm',96:'Thunderstorm + Hail',99:'Severe Thunderstorm'};
                     const label = WMO_LABELS[wcode] || 'Unknown';
+                    const windUnit = imperial ? 'mph' : 'km/h';
+                    const pressureStr = cur.surface_pressure
+                        ? (imperial ? `${Math.round(cur.surface_pressure * 0.02953)} inHg` : `${Math.round(cur.surface_pressure)} hPa`)
+                        : '';
 
                     let h = '<div class="weather-hero">';
                     h += `<div style="text-align:center;margin-right:clamp(1rem,3vw,3rem)"><div class="weather-hero-icon">${wmoIcon(wcode)}</div></div>`;
@@ -620,9 +631,9 @@
                     h += `<div class="weather-hero-details" style="margin-top:0.25rem">${esc(loc.city)}</div>`;
                     h += `<div style="display:flex;gap:clamp(0.75rem,2vw,2rem);margin-top:0.75rem;font-size:clamp(0.8125rem,1vw,1.125rem);color:#94a3b8">`;
                     h += `<span>Feels ${feelsLike}\u00B0</span>`;
-                    h += `<span>Wind ${Math.round(cur.wind_speed_10m)} km/h</span>`;
+                    h += `<span>Wind ${Math.round(cur.wind_speed_10m)} ${windUnit}</span>`;
                     h += `<span>Humidity ${Math.round(cur.relative_humidity_2m)}%</span>`;
-                    if (cur.surface_pressure) h += `<span>${Math.round(cur.surface_pressure)} hPa</span>`;
+                    if (pressureStr) h += `<span>${pressureStr}</span>`;
                     h += '</div></div></div>';
                     inst.el.innerHTML = h;
                 } catch { inst.el.innerHTML = '<div class="wc-sub" style="font-size:1.25rem">Weather unavailable</div>'; }
@@ -636,8 +647,12 @@
             inst.el.innerHTML = '<div class="wc-sub">Loading forecast\u2026</div>';
             async function fetchForecast() {
                 const loc = inst.config.lat ? { lat: inst.config.lat, lon: inst.config.lon } : await getLocation();
+                const imperial = pageUnits !== 'metric';
+                const unitParams = imperial
+                    ? 'temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch'
+                    : 'temperature_unit=celsius&wind_speed_unit=kmh&precipitation_unit=mm';
                 try {
-                    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto`);
+                    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max&${unitParams}&timezone=auto`);
                     const d = await r.json();
                     const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
                     let h = '';
