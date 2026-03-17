@@ -51,6 +51,20 @@ static void navigate(const char *url) {
     }
 }
 
+// Thread-safe navigation: can be called from any goroutine while gtk_main runs.
+static gboolean nav_idle_cb(gpointer data) {
+    char *url = (char *)data;
+    if (webview != NULL) {
+        webkit_web_view_load_uri(WEBKIT_WEB_VIEW(webview), url);
+    }
+    g_free(url);
+    return G_SOURCE_REMOVE;
+}
+
+static void navigate_async(const char *url) {
+    g_idle_add(nav_idle_cb, g_strdup(url));
+}
+
 static void run_webview() {
     if (window != NULL) {
         gtk_widget_show_all(window);
@@ -65,6 +79,7 @@ static int get_init_error() {
 import "C"
 import (
 	"errors"
+	"fmt"
 	"os"
 	"unsafe"
 )
@@ -75,9 +90,16 @@ const webviewAvailable = true
 // launchWebView opens a WebView window pointing to the given URL.
 // This blocks until the WebView is closed.
 func launchWebView(url string, fullscreen bool) error {
-	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+	ensureDisplayEnv()
+
+	display := os.Getenv("DISPLAY")
+	wayland := os.Getenv("WAYLAND_DISPLAY")
+	if display == "" && wayland == "" {
 		return errors.New("kiosk requires a display: set DISPLAY or WAYLAND_DISPLAY environment variable")
 	}
+
+	fmt.Fprintf(os.Stderr, "[kiosk] display env: DISPLAY=%s XAUTHORITY=%s WAYLAND_DISPLAY=%s XDG_RUNTIME_DIR=%s\n",
+		display, os.Getenv("XAUTHORITY"), wayland, os.Getenv("XDG_RUNTIME_DIR"))
 
 	title := C.CString("Kiosk")
 	defer C.free(unsafe.Pointer(title))
@@ -93,7 +115,8 @@ func launchWebView(url string, fullscreen bool) error {
 	if result := C.init_webview(title, 1920, 1080, C.int(fs)); result != 0 {
 		switch C.get_init_error() {
 		case 1:
-			return errors.New("failed to initialize GTK: ensure DISPLAY is set and X11/Wayland is running")
+			return fmt.Errorf("failed to initialize GTK (DISPLAY=%s, XAUTHORITY=%s): ensure the graphical session is active and the agent can access it",
+				display, os.Getenv("XAUTHORITY"))
 		case 2:
 			return errors.New("failed to create GTK window")
 		case 3:
@@ -102,6 +125,13 @@ func launchWebView(url string, fullscreen bool) error {
 			return errors.New("unknown kiosk initialization error")
 		}
 	}
+
+	registerNavigate(func(u string) {
+		cs := C.CString(u)
+		defer C.free(unsafe.Pointer(cs))
+		C.navigate_async(cs)
+	})
+	defer registerNavigate(nil)
 
 	C.navigate(urlC)
 	C.run_webview()
