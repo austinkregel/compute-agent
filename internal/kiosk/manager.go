@@ -6,10 +6,13 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,14 +42,21 @@ type manager struct {
 	// Session token for WS auth
 	token string
 
+	// localURL is the kiosk page address (set during Run), used to
+	// navigate the WebView back after displaying an external URL.
+	localURL string
+
 	// HTTP server
 	listener net.Listener
 	server   *http.Server
+
+	layoutStore *LayoutStore
 }
 
 // New creates a kiosk manager.
 // Returns an error if WebView support is not available (CGO disabled).
-func New(cfg Config, log *logging.Logger, onStatus StatusFunc) (Manager, error) {
+// dataDir is the directory where kiosk-layouts.json will be persisted.
+func New(cfg Config, log *logging.Logger, onStatus StatusFunc, dataDir string) (Manager, error) {
 	if !webviewAvailable {
 		return nil, ErrWebViewUnavailable
 	}
@@ -58,12 +68,18 @@ func New(cfg Config, log *logging.Logger, onStatus StatusFunc) (Manager, error) 
 	}
 	token := hex.EncodeToString(tokenBytes)
 
+	store := NewLayoutStore(dataDir)
+	if err := store.Load(); err != nil {
+		log.Warn("failed to load kiosk layouts, using defaults", "error", err)
+	}
+
 	return &manager{
-		cfg:      cfg,
-		log:      log,
-		onStatus: onStatus,
-		content:  Content{Kind: "dashboard"},
-		token:    token,
+		cfg:         cfg,
+		log:         log,
+		onStatus:    onStatus,
+		content:     Content{Kind: "dashboard"},
+		token:       token,
+		layoutStore: store,
 	}, nil
 }
 
@@ -81,6 +97,8 @@ func (m *manager) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", m.handleIndex)
 	mux.HandleFunc("/ws", m.handleWS)
+	mux.HandleFunc("/api/layouts", m.handleListLayouts)
+	mux.HandleFunc("/api/layout/", m.handleLayout)
 
 	m.server = &http.Server{Handler: mux}
 
@@ -98,6 +116,7 @@ func (m *manager) Run(ctx context.Context) error {
 
 	// Launch WebView
 	kioskURL := fmt.Sprintf("http://%s/?token=%s", addr, m.token)
+	m.localURL = kioskURL
 	m.log.Info("launching kiosk webview", "url", kioskURL)
 
 	// WebView blocks until closed, run in goroutine
@@ -208,16 +227,42 @@ func (m *manager) SetContent(c Content) error {
 		return err
 	}
 
+	// For page kind, resolve widget placements from store if not provided.
+	if c.Kind == "page" && len(c.Widgets) == 0 && m.layoutStore != nil {
+		if layout, ok := m.layoutStore.Get(c.Layout); ok {
+			c.Widgets = layout.Widgets
+		}
+	}
+
 	m.mu.Lock()
+	wasURL := m.content.Kind == "url"
 	m.content = c
 	m.mu.Unlock()
 
-	m.pushContent()
+	switch {
+	case c.Kind == "url":
+		navigateWebView(c.URL)
+	case wasURL && m.localURL != "":
+		navigateWebView(m.localURL)
+	default:
+		m.pushContent()
+	}
+
 	m.emitStatus()
 	return nil
 }
 
 func (m *manager) pushContent() {
+	m.mu.RLock()
+	content := m.content
+	m.mu.RUnlock()
+
+	// URL content is rendered by the WebView itself, not the kiosk page.
+	if content.Kind == "url" {
+		navigateWebView(content.URL)
+		return
+	}
+
 	m.wsMu.Lock()
 	conn := m.wsConn
 	m.wsMu.Unlock()
@@ -225,10 +270,6 @@ func (m *manager) pushContent() {
 	if conn == nil {
 		return
 	}
-
-	m.mu.RLock()
-	content := m.content
-	m.mu.RUnlock()
 
 	msg := map[string]any{
 		"type":    "content",
@@ -249,7 +290,7 @@ func (m *manager) PushStats(data json.RawMessage) {
 	kind := m.content.Kind
 	m.mu.RUnlock()
 
-	if kind != "dashboard" {
+	if kind != "dashboard" && kind != "page" {
 		return
 	}
 
@@ -319,5 +360,93 @@ func (m *manager) setError(err string) {
 func (m *manager) emitStatus() {
 	if m.onStatus != nil {
 		m.onStatus(m.Status())
+	}
+}
+
+func (m *manager) SaveLayout(name string, layout PageLayout) error {
+	if m.layoutStore == nil {
+		return errors.New("layout store not initialized")
+	}
+	if err := m.layoutStore.Save(name, layout); err != nil {
+		return err
+	}
+	// If this is the currently active layout, re-push to kiosk
+	m.mu.RLock()
+	active := m.content.Kind == "page" && m.content.Layout == name
+	m.mu.RUnlock()
+
+	if active {
+		m.mu.Lock()
+		m.content.Widgets = layout.Widgets
+		m.mu.Unlock()
+		m.pushContent()
+	}
+	return nil
+}
+
+func (m *manager) GetLayouts() map[string]PageLayout {
+	if m.layoutStore == nil {
+		return nil
+	}
+	return m.layoutStore.List()
+}
+
+func (m *manager) handleListLayouts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := r.URL.Query().Get("token")
+	if token != m.token {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(m.GetLayouts())
+}
+
+func (m *manager) handleLayout(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token != m.token {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/api/layout/")
+	if name == "" {
+		http.Error(w, "layout name required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		layout, ok := m.layoutStore.Get(name)
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(layout)
+
+	case http.MethodPut:
+		body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+		if err != nil {
+			http.Error(w, "read error", http.StatusBadRequest)
+			return
+		}
+		var layout PageLayout
+		if err := json.Unmarshal(body, &layout); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := m.SaveLayout(name, layout); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }

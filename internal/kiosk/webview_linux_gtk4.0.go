@@ -51,6 +51,20 @@ static void navigate(const char *url) {
     }
 }
 
+// Thread-safe navigation: can be called from any goroutine while gtk_main runs.
+static gboolean nav_idle_cb(gpointer data) {
+    char *url = (char *)data;
+    if (webview != NULL) {
+        webkit_web_view_load_uri(WEBKIT_WEB_VIEW(webview), url);
+    }
+    g_free(url);
+    return G_SOURCE_REMOVE;
+}
+
+static void navigate_async(const char *url) {
+    g_idle_add(nav_idle_cb, g_strdup(url));
+}
+
 static void run_webview() {
     if (window != NULL) {
         gtk_widget_show_all(window);
@@ -326,6 +340,13 @@ func launchWebView(url string, fullscreen bool) error {
 			return errors.New("unknown kiosk initialization error")
 		}
 	}
+
+	registerNavigate(func(u string) {
+		cs := C.CString(u)
+		defer C.free(unsafe.Pointer(cs))
+		C.navigate_async(cs)
+	})
+	defer registerNavigate(nil)
 
 	C.navigate(urlC)
 	C.run_webview()

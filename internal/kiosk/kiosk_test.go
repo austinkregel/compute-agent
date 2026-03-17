@@ -153,6 +153,95 @@ func TestValidateContent_UnknownKind(t *testing.T) {
 	}
 }
 
+func TestValidateContent_Page(t *testing.T) {
+	tests := []struct {
+		name    string
+		content Content
+		wantErr bool
+		errText string
+	}{
+		{
+			name:    "valid page with layout",
+			content: Content{Kind: "page", Layout: "ultrawide"},
+			wantErr: false,
+		},
+		{
+			name: "valid page with layout and widgets",
+			content: Content{Kind: "page", Layout: "wide", Widgets: []WidgetPlacement{
+				{Type: "stats-primary", Col: 1, Row: 1, W: 1, H: 1},
+				{Type: "weather-current", Col: 2, Row: 1, W: 1, H: 1},
+			}},
+			wantErr: false,
+		},
+		{
+			name:    "page missing layout",
+			content: Content{Kind: "page"},
+			wantErr: true,
+			errText: "layout",
+		},
+		{
+			name:    "page invalid layout name",
+			content: Content{Kind: "page", Layout: "bad name!"},
+			wantErr: true,
+			errText: "alphanumeric",
+		},
+		{
+			name:    "page layout name too long",
+			content: Content{Kind: "page", Layout: strings.Repeat("a", 65)},
+			wantErr: true,
+			errText: "alphanumeric",
+		},
+		{
+			name: "page unknown widget type",
+			content: Content{Kind: "page", Layout: "test", Widgets: []WidgetPlacement{
+				{Type: "invalid-type", Col: 1, Row: 1, W: 1, H: 1},
+			}},
+			wantErr: true,
+			errText: "unknown type",
+		},
+		{
+			name: "page widget zero dimensions",
+			content: Content{Kind: "page", Layout: "test", Widgets: []WidgetPlacement{
+				{Type: "stats-primary", Col: 0, Row: 1, W: 1, H: 1},
+			}},
+			wantErr: true,
+			errText: "must be >= 1",
+		},
+		{
+			name: "page too many widgets",
+			content: func() Content {
+				ws := make([]WidgetPlacement, 21)
+				for i := range ws {
+					ws[i] = WidgetPlacement{Type: "stats-primary", Col: 1, Row: 1, W: 1, H: 1}
+				}
+				return Content{Kind: "page", Layout: "test", Widgets: ws}
+			}(),
+			wantErr: true,
+			errText: "too many widgets",
+		},
+		{
+			name:    "page custom layout name with hyphens",
+			content: Content{Kind: "page", Layout: "my-custom-layout-1"},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateContent(tt.content)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				} else if tt.errText != "" && !strings.Contains(err.Error(), tt.errText) {
+					t.Errorf("expected error containing %q, got %q", tt.errText, err.Error())
+				}
+			} else if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestNewStatus(t *testing.T) {
 	status := NewStatus(true, true, Content{Kind: "blank"}, "")
 

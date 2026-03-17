@@ -54,27 +54,29 @@ type Config struct {
 
 // Handlers capture callbacks for server-originated events.
 type Handlers struct {
-	Hello         func()
-	AdminRun      func(AdminCommand)
-	ShellStart    func(ShellStart)
-	ShellInput    func(ShellInput)
-	ShellResize   func(ShellResize)
-	ShellClose    func(ShellClose)
-	LogTailStart  func(LogTailStart)
-	LogTailStop   func(LogTailStop)
-	BackupPlan    func(BackupRequest)
-	BackupStart   func(BackupRequest)
-	SyncKeys      func(SyncKeysRequest)
-	UpdateAgent   func(UpdateAgentRequest)
-	SwitchVariant func(SwitchVariantRequest)
-	CheckUpdates  func(CheckUpdatesRequest)
-	DirList       func(DirListRequest)
-	FilePutStart  func(FilePutStartRequest)
-	FilePutChunk  func(FilePutChunk)
-	FilePutFinish func(FilePutFinishRequest)
-	FileDelete    func(FileDeleteRequest)
-	FileChmod     func(FileChmodRequest)
-	KioskSet      func(KioskSetRequest)
+	Hello           func()
+	AdminRun        func(AdminCommand)
+	ShellStart      func(ShellStart)
+	ShellInput      func(ShellInput)
+	ShellResize     func(ShellResize)
+	ShellClose      func(ShellClose)
+	LogTailStart    func(LogTailStart)
+	LogTailStop     func(LogTailStop)
+	BackupPlan      func(BackupRequest)
+	BackupStart     func(BackupRequest)
+	SyncKeys        func(SyncKeysRequest)
+	UpdateAgent     func(UpdateAgentRequest)
+	SwitchVariant   func(SwitchVariantRequest)
+	CheckUpdates    func(CheckUpdatesRequest)
+	DirList         func(DirListRequest)
+	FilePutStart    func(FilePutStartRequest)
+	FilePutChunk    func(FilePutChunk)
+	FilePutFinish   func(FilePutFinishRequest)
+	FileDelete      func(FileDeleteRequest)
+	FileChmod       func(FileChmodRequest)
+	KioskSet        func(KioskSetRequest)
+	KioskSaveLayout func(KioskSaveLayoutRequest)
+	KioskGetLayouts func(KioskGetLayoutsRequest)
 }
 
 // AdminCommand mirrors the payload emitted by the control plane.
@@ -299,17 +301,30 @@ type FileChmodResult struct {
 
 // --- Kiosk Operations ---
 
+// KioskWidgetPlacement describes a widget's grid position.
+type KioskWidgetPlacement struct {
+	Type   string         `json:"type"`
+	Col    int            `json:"col"`
+	Row    int            `json:"row"`
+	W      int            `json:"w"`
+	H      int            `json:"h"`
+	Config map[string]any `json:"config,omitempty"`
+}
+
 // KioskContent describes what the kiosk should display.
 // Kind determines which fields are used:
 //   - "blank": no additional fields
 //   - "dashboard": self-reporting system dashboard (no additional fields)
 //   - "message": Title (optional) and Text are used
 //   - "url": URL is used (must be http: or https:)
+//   - "page": Layout and optionally Widgets are used
 type KioskContent struct {
-	Kind  string `json:"kind"`            // "blank", "dashboard", "message", or "url"
-	Title string `json:"title,omitempty"` // for "message" kind
-	Text  string `json:"text,omitempty"`  // for "message" kind
-	URL   string `json:"url,omitempty"`   // for "url" kind
+	Kind    string                 `json:"kind"`              // "blank", "dashboard", "message", "url", or "page"
+	Title   string                 `json:"title,omitempty"`   // for "message" kind
+	Text    string                 `json:"text,omitempty"`    // for "message" kind
+	URL     string                 `json:"url,omitempty"`     // for "url" kind
+	Layout  string                 `json:"layout,omitempty"`  // for "page" kind
+	Widgets []KioskWidgetPlacement `json:"widgets,omitempty"` // for "page" kind
 }
 
 // KioskSetRequest is the signed command payload for setting kiosk content.
@@ -317,6 +332,20 @@ type KioskSetRequest struct {
 	RequestID string       `json:"requestId,omitempty"`
 	Content   KioskContent `json:"content"`
 	TS        string       `json:"ts,omitempty"`
+}
+
+// KioskSaveLayoutRequest is the signed command payload for saving a kiosk layout.
+type KioskSaveLayoutRequest struct {
+	Layout  string                 `json:"layout"`
+	Cols    int                    `json:"cols"`
+	Rows    int                    `json:"rows"`
+	Widgets []KioskWidgetPlacement `json:"widgets"`
+	TS      string                 `json:"ts,omitempty"`
+}
+
+// KioskGetLayoutsRequest requests the list of saved layouts.
+type KioskGetLayoutsRequest struct {
+	TS string `json:"ts,omitempty"`
 }
 
 // KioskStatus reports the current state of the kiosk subsystem.
@@ -886,6 +915,26 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 		}
 		if c.handlers.KioskSet != nil {
 			c.handlers.KioskSet(msg)
+		}
+
+	case "kiosk_save_layout":
+		var msg KioskSaveLayoutRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal kiosk_save_layout payload", "error", err)
+			return
+		}
+		if c.handlers.KioskSaveLayout != nil {
+			c.handlers.KioskSaveLayout(msg)
+		}
+
+	case "kiosk_get_layouts":
+		var msg KioskGetLayoutsRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal kiosk_get_layouts payload", "error", err)
+			return
+		}
+		if c.handlers.KioskGetLayouts != nil {
+			c.handlers.KioskGetLayouts(msg)
 		}
 
 	default:

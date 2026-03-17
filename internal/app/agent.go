@@ -110,27 +110,29 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 	})
 
 	handlers := transport.Handlers{
-		Hello:         agent.handleHello,
-		AdminRun:      agent.handleAdminRun,
-		ShellStart:    agent.handleShellStart,
-		ShellInput:    agent.handleShellInput,
-		ShellResize:   agent.handleShellResize,
-		ShellClose:    agent.handleShellClose,
-		LogTailStart:  agent.handleLogTailStart,
-		LogTailStop:   agent.handleLogTailStop,
-		BackupPlan:    agent.handleBackupPlan,
-		BackupStart:   agent.handleBackupStart,
-		SyncKeys:      agent.handleSyncKeys,
-		UpdateAgent:   agent.handleAgentUpdate,
-		SwitchVariant: agent.handleSwitchVariant,
-		CheckUpdates:  agent.handleCheckUpdates,
-		DirList:       agent.handleDirListRequest,
-		FilePutStart:  agent.handleFilePutStart,
-		FilePutChunk:  agent.handleFilePutChunk,
-		FilePutFinish: agent.handleFilePutFinish,
-		FileDelete:    agent.handleFileDelete,
-		FileChmod:     agent.handleFileChmod,
-		KioskSet:      agent.handleKioskSet,
+		Hello:           agent.handleHello,
+		AdminRun:        agent.handleAdminRun,
+		ShellStart:      agent.handleShellStart,
+		ShellInput:      agent.handleShellInput,
+		ShellResize:     agent.handleShellResize,
+		ShellClose:      agent.handleShellClose,
+		LogTailStart:    agent.handleLogTailStart,
+		LogTailStop:     agent.handleLogTailStop,
+		BackupPlan:      agent.handleBackupPlan,
+		BackupStart:     agent.handleBackupStart,
+		SyncKeys:        agent.handleSyncKeys,
+		UpdateAgent:     agent.handleAgentUpdate,
+		SwitchVariant:   agent.handleSwitchVariant,
+		CheckUpdates:    agent.handleCheckUpdates,
+		DirList:         agent.handleDirListRequest,
+		FilePutStart:    agent.handleFilePutStart,
+		FilePutChunk:    agent.handleFilePutChunk,
+		FilePutFinish:   agent.handleFilePutFinish,
+		FileDelete:      agent.handleFileDelete,
+		FileChmod:       agent.handleFileChmod,
+		KioskSet:        agent.handleKioskSet,
+		KioskSaveLayout: agent.handleKioskSaveLayout,
+		KioskGetLayouts: agent.handleKioskGetLayouts,
 	}
 
 	t, err := transport.New(transport.Config{
@@ -167,7 +169,7 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 			kioskMgr, err := kiosk.New(kiosk.Config{
 				ListenAddr: cfg.Kiosk.ListenAddr,
 				Fullscreen: cfg.Kiosk.Fullscreen,
-			}, log.With("component", "kiosk"), agent.handleKioskStatus)
+			}, log.With("component", "kiosk"), agent.handleKioskStatus, ".")
 			if err != nil {
 				log.Error("kiosk initialization failed", "error", err,
 					"hint", "check that required GUI libraries are installed")
@@ -937,19 +939,66 @@ func (a *Agent) handleKioskSet(msg transport.KioskSetRequest) {
 	}
 
 	content := kiosk.Content{
-		Kind:  msg.Content.Kind,
-		Title: msg.Content.Title,
-		Text:  msg.Content.Text,
-		URL:   msg.Content.URL,
+		Kind:   msg.Content.Kind,
+		Title:  msg.Content.Title,
+		Text:   msg.Content.Text,
+		URL:    msg.Content.URL,
+		Layout: msg.Content.Layout,
+	}
+	for _, w := range msg.Content.Widgets {
+		content.Widgets = append(content.Widgets, kiosk.WidgetPlacement{
+			Type: w.Type, Col: w.Col, Row: w.Row, W: w.W, H: w.H, Config: w.Config,
+		})
 	}
 
 	if err := a.kiosk.SetContent(content); err != nil {
 		a.log.Error("kiosk set content failed", "error", err, "kind", content.Kind)
-		// Status will be emitted by the kiosk subsystem with the error
 		return
 	}
 
 	a.log.Info("kiosk content updated", "kind", content.Kind, "requestId", msg.RequestID)
+}
+
+func (a *Agent) handleKioskSaveLayout(msg transport.KioskSaveLayoutRequest) {
+	if a.kiosk == nil {
+		a.log.Warn("kiosk_save_layout received but kiosk not enabled")
+		_ = a.transport.Emit("kiosk_layout_saved", map[string]any{
+			"layout": msg.Layout, "ok": false, "error": "kiosk not enabled",
+		})
+		return
+	}
+
+	layout := kiosk.PageLayout{Cols: msg.Cols, Rows: msg.Rows}
+	for _, w := range msg.Widgets {
+		layout.Widgets = append(layout.Widgets, kiosk.WidgetPlacement{
+			Type: w.Type, Col: w.Col, Row: w.Row, W: w.W, H: w.H, Config: w.Config,
+		})
+	}
+
+	if err := a.kiosk.SaveLayout(msg.Layout, layout); err != nil {
+		a.log.Error("kiosk save layout failed", "error", err, "layout", msg.Layout)
+		_ = a.transport.Emit("kiosk_layout_saved", map[string]any{
+			"layout": msg.Layout, "ok": false, "error": err.Error(),
+		})
+		return
+	}
+
+	a.log.Info("kiosk layout saved", "layout", msg.Layout)
+	_ = a.transport.Emit("kiosk_layout_saved", map[string]any{
+		"layout": msg.Layout, "ok": true,
+	})
+}
+
+func (a *Agent) handleKioskGetLayouts(_ transport.KioskGetLayoutsRequest) {
+	if a.kiosk == nil {
+		_ = a.transport.Emit("kiosk_layouts", map[string]any{
+			"layouts": map[string]any{},
+		})
+		return
+	}
+	_ = a.transport.Emit("kiosk_layouts", map[string]any{
+		"layouts": a.kiosk.GetLayouts(),
+	})
 }
 
 func (a *Agent) handleKioskStatus(status kiosk.Status) {
@@ -957,16 +1006,20 @@ func (a *Agent) handleKioskStatus(status kiosk.Status) {
 }
 
 func (a *Agent) emitKioskStatus(status kiosk.Status) {
+	contentMap := map[string]any{
+		"kind":  status.Content.Kind,
+		"title": status.Content.Title,
+		"text":  status.Content.Text,
+		"url":   status.Content.URL,
+	}
+	if status.Content.Layout != "" {
+		contentMap["layout"] = status.Content.Layout
+	}
 	payload := map[string]any{
 		"kiosk": map[string]any{
 			"running":   status.Running,
 			"connected": status.Connected,
-			"content": map[string]any{
-				"kind":  status.Content.Kind,
-				"title": status.Content.Title,
-				"text":  status.Content.Text,
-				"url":   status.Content.URL,
-			},
+			"content":   contentMap,
 			"lastError": status.LastError,
 			"ts":        status.TS,
 		},

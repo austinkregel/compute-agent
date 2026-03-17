@@ -55,13 +55,6 @@
             color: #94a3b8;
             white-space: pre-wrap;
         }
-        #kiosk-iframe {
-            display: none;
-            width: 100%;
-            height: 100%;
-            border: none;
-        }
-
         /* ── Dashboard view ── */
         #kiosk-dashboard {
             display: none;
@@ -136,8 +129,6 @@
             color: #94a3b8;
             margin-top: 0.25rem;
         }
-
-        /* Progress / gauge bars */
         .gauge-track {
             width: 100%;
             height: 8px;
@@ -156,234 +147,49 @@
         .gauge-yellow { background: #eab308; }
         .gauge-orange { background: #f97316; }
         .gauge-red    { background: #ef4444; }
-
-        /* Circular gauge for CPU */
         .ring-gauge {
             position: relative;
             width: 100px;
             height: 100px;
             margin: 0 auto;
         }
-        .ring-gauge svg {
-            transform: rotate(-90deg);
-        }
-        .ring-bg {
-            fill: none;
-            stroke: #334155;
-            stroke-width: 8;
-        }
-        .ring-fill {
-            fill: none;
-            stroke-width: 8;
-            stroke-linecap: round;
-            transition: stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.4s;
-        }
-        .ring-label {
-            position: absolute;
-            inset: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.375rem;
-            font-weight: 600;
-            color: #f1f5f9;
-        }
-
-        /* Battery indicator */
-        .battery-shell {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .battery-icon {
-            width: 40px;
-            height: 20px;
-            border: 2px solid #64748b;
-            border-radius: 3px;
-            position: relative;
-            display: flex;
-            align-items: center;
-            padding: 2px;
-        }
-        .battery-icon::after {
-            content: '';
-            position: absolute;
-            right: -5px;
-            top: 5px;
-            width: 3px;
-            height: 8px;
-            background: #64748b;
-            border-radius: 0 2px 2px 0;
-        }
-        .battery-level {
-            height: 100%;
-            border-radius: 1px;
-            transition: width 0.6s, background 0.4s;
-        }
-        .battery-text {
-            font-size: 1.125rem;
-            font-weight: 600;
-            color: #f1f5f9;
-        }
-        .battery-status {
-            font-size: 0.75rem;
-            color: #94a3b8;
-            margin-left: 0.25rem;
-        }
-
-        /* Disk list */
-        .disk-row {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            margin-bottom: 0.75rem;
-        }
-        .disk-row:last-child {
-            margin-bottom: 0;
-        }
-        .disk-mount {
-            font-size: 0.8125rem;
-            color: #cbd5e1;
-            min-width: 80px;
-            font-family: 'Fira Code', 'Cascadia Code', monospace;
-        }
-        .disk-bar-wrap {
-            flex: 1;
-            height: 6px;
-            background: #334155;
-            border-radius: 999px;
-            overflow: hidden;
-        }
-        .disk-bar-fill {
-            height: 100%;
-            border-radius: 999px;
-            transition: width 0.6s;
-        }
-        .disk-pct {
-            font-size: 0.75rem;
-            color: #94a3b8;
-            min-width: 40px;
-            text-align: right;
-        }
-
-        /* Thermal sensors */
-        .thermal-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.75rem;
-        }
-        .thermal-chip {
-            display: flex;
-            align-items: center;
-            gap: 0.375rem;
-            background: #334155;
-            border-radius: 0.375rem;
-            padding: 0.375rem 0.625rem;
-            font-size: 0.8125rem;
-        }
-        .thermal-chip-name {
-            color: #94a3b8;
-        }
-        .thermal-chip-val {
-            font-weight: 600;
-            color: #f1f5f9;
-        }
-
-        /* Load averages */
-        .load-row {
-            display: flex;
-            gap: 1.5rem;
-        }
-        .load-item {
-            text-align: center;
-        }
-        .load-value {
-            font-size: 1.25rem;
-            font-weight: 600;
-            color: #f1f5f9;
-        }
-        .load-label {
-            font-size: 0.6875rem;
-            color: #64748b;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-top: 0.125rem;
-        }
-
-        /* Empty state */
-        .dash-empty {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            color: #475569;
-        }
-        .dash-empty-icon {
-            width: 48px;
-            height: 48px;
-            margin-bottom: 1rem;
-            opacity: 0.4;
-        }
-        .dash-empty-text {
-            font-size: 1rem;
-            color: #64748b;
-        }
-        .dash-empty-sub {
-            font-size: 0.8125rem;
-            color: #475569;
-            margin-top: 0.25rem;
-        }
-        .pulse {
-            animation: pulse 2s ease-in-out infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 0.4; }
-            50% { opacity: 0.8; }
-        }
-
-        /* Network interfaces */
-        .net-list {
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-        .net-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            font-size: 0.8125rem;
-        }
-        .net-name {
-            color: #94a3b8;
-            font-family: 'Fira Code', 'Cascadia Code', monospace;
-        }
-        .net-addr {
-            color: #cbd5e1;
-            font-family: 'Fira Code', 'Cascadia Code', monospace;
-        }
-
-        /* Status indicator */
-        .status-indicator {
-            position: fixed;
-            bottom: 12px;
-            right: 12px;
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: #475569;
-            transition: background 0.3s;
-            z-index: 100;
-        }
-        .status-indicator.connected {
-            background: #22c55e;
-            box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
-        }
-        .status-indicator.disconnected {
-            background: #ef4444;
-        }
-
-        /* Responsive adjustments */
+        .ring-gauge svg { transform: rotate(-90deg); }
+        .ring-bg { fill: none; stroke: #334155; stroke-width: 8; }
+        .ring-fill { fill: none; stroke-width: 8; stroke-linecap: round; transition: stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.4s; }
+        .ring-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 1.375rem; font-weight: 600; color: #f1f5f9; }
+        .battery-shell { display: inline-flex; align-items: center; gap: 0.5rem; }
+        .battery-icon { width: 40px; height: 20px; border: 2px solid #64748b; border-radius: 3px; position: relative; display: flex; align-items: center; padding: 2px; }
+        .battery-icon::after { content: ''; position: absolute; right: -5px; top: 5px; width: 3px; height: 8px; background: #64748b; border-radius: 0 2px 2px 0; }
+        .battery-level { height: 100%; border-radius: 1px; transition: width 0.6s, background 0.4s; }
+        .battery-text { font-size: 1.125rem; font-weight: 600; color: #f1f5f9; }
+        .battery-status { font-size: 0.75rem; color: #94a3b8; margin-left: 0.25rem; }
+        .disk-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+        .disk-row:last-child { margin-bottom: 0; }
+        .disk-mount { font-size: 0.8125rem; color: #cbd5e1; min-width: 80px; font-family: 'Fira Code', 'Cascadia Code', monospace; }
+        .disk-bar-wrap { flex: 1; height: 6px; background: #334155; border-radius: 999px; overflow: hidden; }
+        .disk-bar-fill { height: 100%; border-radius: 999px; transition: width 0.6s; }
+        .disk-pct { font-size: 0.75rem; color: #94a3b8; min-width: 40px; text-align: right; }
+        .thermal-list { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+        .thermal-chip { display: flex; align-items: center; gap: 0.375rem; background: #334155; border-radius: 0.375rem; padding: 0.375rem 0.625rem; font-size: 0.8125rem; }
+        .thermal-chip-name { color: #94a3b8; }
+        .thermal-chip-val { font-weight: 600; color: #f1f5f9; }
+        .load-row { display: flex; gap: 1.5rem; }
+        .load-item { text-align: center; }
+        .load-value { font-size: 1.25rem; font-weight: 600; color: #f1f5f9; }
+        .load-label { font-size: 0.6875rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.125rem; }
+        .dash-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #475569; }
+        .dash-empty-icon { width: 48px; height: 48px; margin-bottom: 1rem; opacity: 0.4; }
+        .dash-empty-text { font-size: 1rem; color: #64748b; }
+        .dash-empty-sub { font-size: 0.8125rem; color: #475569; margin-top: 0.25rem; }
+        .pulse { animation: pulse 2s ease-in-out infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.8; } }
+        .net-list { display: flex; flex-direction: column; gap: 0.5rem; }
+        .net-row { display: flex; align-items: center; justify-content: space-between; font-size: 0.8125rem; }
+        .net-name { color: #94a3b8; font-family: 'Fira Code', 'Cascadia Code', monospace; }
+        .net-addr { color: #cbd5e1; font-family: 'Fira Code', 'Cascadia Code', monospace; }
+        .status-indicator { position: fixed; bottom: 12px; right: 12px; width: 10px; height: 10px; border-radius: 50%; background: #475569; transition: background 0.3s; z-index: 100; }
+        .status-indicator.connected { background: #22c55e; box-shadow: 0 0 6px rgba(34, 197, 94, 0.4); }
+        .status-indicator.disconnected { background: #ef4444; }
         @media (max-width: 640px) {
             #kiosk-dashboard { padding: 1.25rem; }
             .dash-hostname { font-size: 1.5rem; }
@@ -393,6 +199,108 @@
         @media (min-width: 1600px) {
             .dash-grid { grid-template-columns: repeat(4, 1fr); }
         }
+
+        /* ── Page view (widget grid) ── */
+        #kiosk-page {
+            display: none;
+            width: 100%;
+            height: 100%;
+            padding: 1rem;
+            overflow: hidden;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        }
+        #kiosk-page .page-grid {
+            display: grid;
+            gap: 0.75rem;
+            width: 100%;
+            height: 100%;
+        }
+        .widget-card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 0.75rem;
+            padding: 1rem;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .widget-card-label {
+            font-size: 0.6875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #64748b;
+            margin-bottom: 0.5rem;
+            flex-shrink: 0;
+        }
+        .widget-card-body {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+        }
+        .wc-val { font-size: 1.5rem; font-weight: 600; color: #f1f5f9; }
+        .wc-sub { font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem; }
+        .wc-row { display: flex; align-items: center; gap: 0.5rem; }
+        .wc-green { color: #22c55e; }
+        .wc-red { color: #ef4444; }
+        .wc-yellow { color: #eab308; }
+
+        /* Analog clock */
+        .analog-clock { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; }
+        .analog-clock svg { width: 80px; height: 80px; }
+        .clock-digital { font-size: 0.75rem; color: #cbd5e1; font-family: 'Fira Code', monospace; }
+        .clock-city { font-size: 0.625rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+
+        /* Ambient photo */
+        .ambient-strip {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            background: #0f172a;
+        }
+        .ambient-strip img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            filter: brightness(0.4);
+            transition: opacity 1s;
+        }
+
+        /* Forecast day row */
+        .forecast-day { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0; border-bottom: 1px solid #1e293b; font-size: 0.8125rem; }
+        .forecast-day:last-child { border-bottom: none; }
+        .forecast-day-name { width: 48px; color: #94a3b8; }
+        .forecast-day-temps { flex: 1; display: flex; align-items: center; gap: 0.25rem; }
+        .forecast-lo { color: #64748b; }
+        .forecast-hi { color: #f1f5f9; font-weight: 600; }
+        .forecast-bar { flex: 1; height: 4px; background: #334155; border-radius: 2px; position: relative; overflow: hidden; }
+        .forecast-bar-fill { position: absolute; left: 0; top: 0; height: 100%; background: linear-gradient(90deg, #3b82f6, #ef4444); border-radius: 2px; }
+
+        /* ISS map */
+        .iss-map-wrap { position: relative; width: 100%; height: 100%; }
+        .iss-map-wrap svg { width: 100%; height: 100%; }
+        .iss-dot { fill: #f59e0b; }
+        .iss-badge { position: absolute; top: 4px; right: 4px; background: #1e293b; border: 1px solid #475569; border-radius: 0.375rem; padding: 0.125rem 0.375rem; font-size: 0.625rem; color: #94a3b8; }
+
+        /* Moon phase */
+        .moon-wrap { display: flex; align-items: center; gap: 1rem; }
+        .moon-svg { width: 48px; height: 48px; }
+        .sun-times { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; color: #94a3b8; }
+        .sun-times span { display: flex; align-items: center; gap: 0.375rem; }
+
+        /* Calendar */
+        .cal-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+        .cal-table th { color: #64748b; font-weight: 500; text-align: center; padding: 0.125rem; }
+        .cal-table td { text-align: center; padding: 0.25rem; color: #94a3b8; border-radius: 0.25rem; }
+        .cal-table td.today { background: #3b82f6; color: #fff; font-weight: 600; }
+
+        /* News */
+        .news-item { border-bottom: 1px solid #334155; padding: 0.5rem 0; }
+        .news-item:last-child { border-bottom: none; }
+        .news-title { font-size: 0.8125rem; color: #e2e8f0; font-weight: 500; margin-bottom: 0.25rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .news-extract { font-size: 0.6875rem; color: #94a3b8; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     </style>
 </head>
 <body>
@@ -402,8 +310,6 @@
             <h1 id="message-title"></h1>
             <p id="message-text"></p>
         </div>
-        <iframe id="kiosk-iframe" sandbox="allow-scripts allow-same-origin"></iframe>
-
         <div id="kiosk-dashboard">
             <div class="dash-header">
                 <div>
@@ -413,7 +319,6 @@
                 <div class="dash-meta" id="dash-meta-right"></div>
             </div>
             <div class="dash-grid" id="dash-grid">
-                <!-- Cards are injected by JS -->
                 <div class="dash-empty" id="dash-empty">
                     <svg class="dash-empty-icon pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
@@ -422,6 +327,9 @@
                     <div class="dash-empty-sub">System stats will appear shortly</div>
                 </div>
             </div>
+        </div>
+        <div id="kiosk-page">
+            <div class="page-grid" id="page-grid"></div>
         </div>
     </div>
     <div id="status-indicator" class="status-indicator disconnected"></div>
@@ -434,87 +342,54 @@
         let reconnectTimer = null;
         let pingTimer = null;
         let latestStats = null;
+        let pageTimers = [];
+        let pageWidgets = [];
+        let cachedLocation = null;
 
         const blankEl = document.getElementById('kiosk-blank');
         const messageEl = document.getElementById('kiosk-message');
         const messageTitleEl = document.getElementById('message-title');
         const messageTextEl = document.getElementById('message-text');
-        const iframeEl = document.getElementById('kiosk-iframe');
         const dashboardEl = document.getElementById('kiosk-dashboard');
+        const pageEl = document.getElementById('kiosk-page');
         const statusEl = document.getElementById('status-indicator');
 
         function connect() {
-            if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
-                return;
-            }
-
+            if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
             ws = new WebSocket(wsUrl);
-
-            ws.onopen = () => {
-                console.log('[kiosk] connected');
-                statusEl.className = 'status-indicator connected';
-                startPing();
-            };
-
-            ws.onclose = () => {
-                console.log('[kiosk] disconnected');
-                statusEl.className = 'status-indicator disconnected';
-                stopPing();
-                scheduleReconnect();
-            };
-
-            ws.onerror = (e) => {
-                console.error('[kiosk] ws error', e);
-            };
-
-            ws.onmessage = (e) => {
-                try {
-                    const msg = JSON.parse(e.data);
-                    handleMessage(msg);
-                } catch (err) {
-                    console.error('[kiosk] parse error', err);
-                }
-            };
+            ws.onopen = () => { statusEl.className = 'status-indicator connected'; startPing(); };
+            ws.onclose = () => { statusEl.className = 'status-indicator disconnected'; stopPing(); scheduleReconnect(); };
+            ws.onerror = () => {};
+            ws.onmessage = (e) => { try { handleMessage(JSON.parse(e.data)); } catch {} };
         }
 
         function handleMessage(msg) {
-            if (msg.type === 'content') {
-                applyContent(msg.content);
-            } else if (msg.type === 'stats') {
-                latestStats = msg.data;
-                renderDashboard(msg.data);
-            } else if (msg.type === 'pong') {
-                // Keepalive response
-            }
+            if (msg.type === 'content') applyContent(msg.content);
+            else if (msg.type === 'stats') { latestStats = msg.data; renderDashboard(msg.data); updatePageStats(msg.data); }
+            else if (msg.type === 'pong') {}
         }
 
         function applyContent(content) {
             blankEl.style.display = 'none';
             messageEl.style.display = 'none';
-            iframeEl.style.display = 'none';
             dashboardEl.style.display = 'none';
+            pageEl.style.display = 'none';
+            destroyPage();
 
             switch (content.kind) {
                 case 'blank':
                     blankEl.style.display = 'flex';
                     break;
-
-                case 'dashboard':
-                    dashboardEl.style.display = 'block';
-                    if (latestStats) renderDashboard(latestStats);
-                    break;
-
                 case 'message':
                     messageTitleEl.textContent = content.title || '';
                     messageTextEl.textContent = content.text || '';
                     messageEl.style.display = 'flex';
                     break;
-
-                case 'url':
-                    iframeEl.src = content.url;
-                    iframeEl.style.display = 'block';
+                case 'page':
+                    pageEl.style.display = 'block';
+                    initPage(content.layout, content.widgets || []);
                     break;
-
+                case 'dashboard':
                 default:
                     dashboardEl.style.display = 'block';
                     if (latestStats) renderDashboard(latestStats);
@@ -528,244 +403,387 @@
             const i = Math.floor(Math.log(b) / Math.log(1024));
             return (b / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0) + ' ' + units[i];
         }
-
         function fmtUptime(sec) {
-            if (!sec) return '—';
-            const d = Math.floor(sec / 86400);
-            const h = Math.floor((sec % 86400) / 3600);
-            const m = Math.floor((sec % 3600) / 60);
-            if (d > 0) return `${d}d ${h}h ${m}m`;
-            if (h > 0) return `${h}h ${m}m`;
-            return `${m}m`;
+            if (!sec) return '\u2014';
+            const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+            if (d > 0) return d+'d '+h+'h '+m+'m';
+            if (h > 0) return h+'h '+m+'m';
+            return m+'m';
         }
+        function gaugeColor(pct) { return pct < 60 ? 'gauge-green' : pct < 80 ? 'gauge-yellow' : pct < 90 ? 'gauge-orange' : 'gauge-red'; }
+        function ringColor(pct) { return pct < 60 ? '#22c55e' : pct < 80 ? '#eab308' : pct < 90 ? '#f97316' : '#ef4444'; }
+        function esc(str) { const d = document.createElement('div'); d.textContent = str || ''; return d.innerHTML; }
+        function cap(str) { return str ? str.charAt(0).toUpperCase() + str.slice(1) : ''; }
 
-        function gaugeColor(pct) {
-            if (pct < 60) return 'gauge-green';
-            if (pct < 80) return 'gauge-yellow';
-            if (pct < 90) return 'gauge-orange';
-            return 'gauge-red';
-        }
-
-        function ringColor(pct) {
-            if (pct < 60) return '#22c55e';
-            if (pct < 80) return '#eab308';
-            if (pct < 90) return '#f97316';
-            return '#ef4444';
-        }
-
-        // ── Dashboard renderer ──
+        // ── Dashboard renderer (legacy, unchanged logic) ──
         function renderDashboard(s) {
             const emptyEl = document.getElementById('dash-empty');
             if (emptyEl) emptyEl.remove();
-
-            // Header
-            const hostnameEl = document.getElementById('dash-hostname');
-            hostnameEl.textContent = s.hostname || 'Unknown Host';
-
+            document.getElementById('dash-hostname').textContent = s.hostname || 'Unknown Host';
             const metaEl = document.getElementById('dash-meta');
             const metaParts = [];
             if (s.platform) metaParts.push(cap(s.platform) + (s.release ? ' ' + s.release : ''));
             if (s.arch) metaParts.push(s.arch);
             if (s.kernelVersion) metaParts.push(s.kernelVersion);
             if (s.agentVersion) metaParts.push('Agent v' + s.agentVersion);
-            metaEl.innerHTML = metaParts.map(t =>
-                `<span class="dash-meta-item"><span class="dash-meta-dot"></span>${esc(t)}</span>`
-            ).join('');
-
+            metaEl.innerHTML = metaParts.map(t => `<span class="dash-meta-item"><span class="dash-meta-dot"></span>${esc(t)}</span>`).join('');
             const metaRightEl = document.getElementById('dash-meta-right');
             const rightParts = [];
             if (s.uptimeSec) rightParts.push('Uptime: ' + fmtUptime(s.uptimeSec));
-            if (s.ts) {
-                const d = new Date(s.ts);
-                rightParts.push(d.toLocaleString());
-            }
-            metaRightEl.innerHTML = rightParts.map(t =>
-                `<span class="dash-meta-item">${esc(t)}</span>`
-            ).join('');
-
-            // Build cards
+            if (s.ts) rightParts.push(new Date(s.ts).toLocaleString());
+            metaRightEl.innerHTML = rightParts.map(t => `<span class="dash-meta-item">${esc(t)}</span>`).join('');
             const grid = document.getElementById('dash-grid');
             grid.innerHTML = '';
-
-            // CPU card with ring gauge
             const cpuPct = Math.round(s.cpu || 0);
-            grid.appendChild(makeCard('CPU', `
-                <div style="display:flex;align-items:center;gap:1.5rem">
-                    <div class="ring-gauge">
-                        <svg viewBox="0 0 100 100" width="100" height="100">
-                            <circle class="ring-bg" cx="50" cy="50" r="42"/>
-                            <circle class="ring-fill" cx="50" cy="50" r="42"
-                                stroke="${ringColor(cpuPct)}"
-                                stroke-dasharray="${2 * Math.PI * 42}"
-                                stroke-dashoffset="${2 * Math.PI * 42 * (1 - cpuPct / 100)}"/>
-                        </svg>
-                        <div class="ring-label">${cpuPct}%</div>
-                    </div>
-                    <div>
-                        <div class="dash-card-sub">${s.cpus || '—'} cores</div>
-                        ${s.load ? `<div style="margin-top:0.75rem"><div class="load-row">
-                            <div class="load-item"><div class="load-value">${s.load.load1?.toFixed(2) ?? '—'}</div><div class="load-label">1 min</div></div>
-                            <div class="load-item"><div class="load-value">${s.load.load5?.toFixed(2) ?? '—'}</div><div class="load-label">5 min</div></div>
-                            <div class="load-item"><div class="load-value">${s.load.load15?.toFixed(2) ?? '—'}</div><div class="load-label">15 min</div></div>
-                        </div></div>` : ''}
-                    </div>
-                </div>
-            `));
-
-            // Memory card
-            if (s.mem) {
-                const memPct = s.mem.total ? Math.round(s.mem.used / s.mem.total * 100) : 0;
-                grid.appendChild(makeCard('Memory', `
-                    <div class="dash-card-value">${fmtBytes(s.mem.used)} <span style="font-size:0.875rem;font-weight:400;color:#94a3b8">/ ${fmtBytes(s.mem.total)}</span></div>
-                    <div class="dash-card-sub">${memPct}% used &middot; ${fmtBytes(s.mem.free)} free</div>
-                    <div class="gauge-track"><div class="gauge-fill ${gaugeColor(memPct)}" style="width:${memPct}%"></div></div>
-                `));
-            }
-
-            // Battery card
-            if (s.battery && s.battery.devices && s.battery.devices.length > 0) {
-                const dev = s.battery.devices[0];
-                const pct = Math.round(dev.percent || 0);
-                const statusText = dev.status ? cap(dev.status) : '';
-                const isCharging = dev.status === 'charging';
-                const batColor = pct > 50 ? '#22c55e' : (pct > 20 ? '#eab308' : '#ef4444');
-
-                let extra = '';
-                if (dev.powerNowW) extra += `${dev.powerNowW.toFixed(1)}W`;
-                if (dev.voltageNowV) extra += (extra ? ' · ' : '') + `${dev.voltageNowV.toFixed(2)}V`;
-                if (dev.tempC) extra += (extra ? ' · ' : '') + `${dev.tempC.toFixed(1)}°C`;
-                if (dev.cycleCount) extra += (extra ? ' · ' : '') + `${dev.cycleCount} cycles`;
-                if (dev.timeToEmptySec && dev.timeToEmptySec > 0 && !isCharging) {
-                    extra += (extra ? ' · ' : '') + fmtUptime(dev.timeToEmptySec) + ' remaining';
-                }
-                if (dev.timeToFullSec && dev.timeToFullSec > 0 && isCharging) {
-                    extra += (extra ? ' · ' : '') + fmtUptime(dev.timeToFullSec) + ' to full';
-                }
-
-                grid.appendChild(makeCard('Battery', `
-                    <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem">
-                        <div class="battery-shell">
-                            <div class="battery-icon">
-                                <div class="battery-level" style="width:${pct}%;background:${batColor}"></div>
-                            </div>
-                        </div>
-                        <span class="battery-text">${pct}%</span>
-                        <span class="battery-status">${esc(statusText)}${isCharging ? ' ⚡' : ''}</span>
-                    </div>
-                    ${extra ? `<div class="dash-card-sub">${esc(extra)}</div>` : ''}
-                    <div class="gauge-track"><div class="gauge-fill" style="width:${pct}%;background:${batColor}"></div></div>
-                `));
-            }
-
-            // Disk cards (show up to 4 significant mounts in one card)
-            if (s.disk && s.disk.length > 0) {
-                const disks = s.disk.slice(0, 6);
-                let diskHtml = '';
-                for (const d of disks) {
-                    const pct = Math.round(d.capacity || 0);
-                    const used = d.used || 0;
-                    const avail = d.avail || 0;
-                    diskHtml += `<div class="disk-row">
-                        <span class="disk-mount" title="${esc(d.fsName || '')}">${esc(d.mount)}</span>
-                        <div class="disk-bar-wrap"><div class="disk-bar-fill ${gaugeColor(pct)}" style="width:${pct}%"></div></div>
-                        <span class="disk-pct">${pct}%</span>
-                    </div>`;
-                }
-                grid.appendChild(makeCard('Disk', diskHtml));
-            }
-
-            // Thermal sensors
-            if (s.thermal && s.thermal.length > 0) {
-                const chips = s.thermal
-                    .filter(t => t.temperature > 0)
-                    .slice(0, 8)
-                    .map(t => {
-                        const c = t.temperature < 60 ? '#22c55e' : (t.temperature < 80 ? '#eab308' : '#ef4444');
-                        const label = t.label || t.sensorKey || 'Sensor';
-                        return `<div class="thermal-chip">
-                            <span class="thermal-chip-name">${esc(label)}</span>
-                            <span class="thermal-chip-val" style="color:${c}">${t.temperature.toFixed(0)}°C</span>
-                        </div>`;
-                    }).join('');
-                if (chips) grid.appendChild(makeCard('Thermal', `<div class="thermal-list">${chips}</div>`));
-            }
-
-            // Network interfaces
-            if (s.netIfaces && s.netIfaces.length > 0) {
-                const ifaces = s.netIfaces.slice(0, 6);
-                const rows = ifaces.map(n => `<div class="net-row">
-                    <span class="net-name">${esc(n.name)}</span>
-                    <span class="net-addr">${esc(n.address)}</span>
-                </div>`).join('');
-                grid.appendChild(makeCard('Network', `<div class="net-list">${rows}</div>`));
-            }
-
-            // System health card
+            grid.appendChild(makeCard('CPU', `<div style="display:flex;align-items:center;gap:1.5rem"><div class="ring-gauge"><svg viewBox="0 0 100 100" width="100" height="100"><circle class="ring-bg" cx="50" cy="50" r="42"/><circle class="ring-fill" cx="50" cy="50" r="42" stroke="${ringColor(cpuPct)}" stroke-dasharray="${2*Math.PI*42}" stroke-dashoffset="${2*Math.PI*42*(1-cpuPct/100)}"/></svg><div class="ring-label">${cpuPct}%</div></div><div><div class="dash-card-sub">${s.cpus||'\u2014'} cores</div>${s.load?`<div style="margin-top:0.75rem"><div class="load-row"><div class="load-item"><div class="load-value">${s.load.load1?.toFixed(2)??'\u2014'}</div><div class="load-label">1 min</div></div><div class="load-item"><div class="load-value">${s.load.load5?.toFixed(2)??'\u2014'}</div><div class="load-label">5 min</div></div><div class="load-item"><div class="load-value">${s.load.load15?.toFixed(2)??'\u2014'}</div><div class="load-label">15 min</div></div></div></div>`:''}</div></div>`));
+            if (s.mem) { const memPct = s.mem.total ? Math.round(s.mem.used / s.mem.total * 100) : 0; grid.appendChild(makeCard('Memory', `<div class="dash-card-value">${fmtBytes(s.mem.used)} <span style="font-size:0.875rem;font-weight:400;color:#94a3b8">/ ${fmtBytes(s.mem.total)}</span></div><div class="dash-card-sub">${memPct}% used &middot; ${fmtBytes(s.mem.free)} free</div><div class="gauge-track"><div class="gauge-fill ${gaugeColor(memPct)}" style="width:${memPct}%"></div></div>`)); }
+            if (s.battery && s.battery.devices && s.battery.devices.length > 0) { const dev = s.battery.devices[0]; const pct = Math.round(dev.percent||0); const batColor = pct > 50 ? '#22c55e' : pct > 20 ? '#eab308' : '#ef4444'; grid.appendChild(makeCard('Battery', `<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem"><div class="battery-shell"><div class="battery-icon"><div class="battery-level" style="width:${pct}%;background:${batColor}"></div></div></div><span class="battery-text">${pct}%</span><span class="battery-status">${esc(cap(dev.status||''))}${dev.status==='charging'?' \u26A1':''}</span></div><div class="gauge-track"><div class="gauge-fill" style="width:${pct}%;background:${batColor}"></div></div>`)); }
+            if (s.disk && s.disk.length > 0) { let h=''; for (const d of s.disk.slice(0,6)) { const p=Math.round(d.capacity||0); h+=`<div class="disk-row"><span class="disk-mount" title="${esc(d.fsName||'')}">${esc(d.mount)}</span><div class="disk-bar-wrap"><div class="disk-bar-fill ${gaugeColor(p)}" style="width:${p}%"></div></div><span class="disk-pct">${p}%</span></div>`; } grid.appendChild(makeCard('Disk', h)); }
+            if (s.thermal && s.thermal.length > 0) { const chips = s.thermal.filter(t=>t.temperature>0).slice(0,8).map(t=>{const c=t.temperature<60?'#22c55e':t.temperature<80?'#eab308':'#ef4444'; return `<div class="thermal-chip"><span class="thermal-chip-name">${esc(t.label||t.sensorKey||'Sensor')}</span><span class="thermal-chip-val" style="color:${c}">${t.temperature.toFixed(0)}\u00B0C</span></div>`;}).join(''); if (chips) grid.appendChild(makeCard('Thermal', `<div class="thermal-list">${chips}</div>`)); }
+            if (s.netIfaces && s.netIfaces.length > 0) { const rows = s.netIfaces.slice(0,6).map(n=>`<div class="net-row"><span class="net-name">${esc(n.name)}</span><span class="net-addr">${esc(n.address)}</span></div>`).join(''); grid.appendChild(makeCard('Network', `<div class="net-list">${rows}</div>`)); }
             const healthParts = [];
-            if (s.securityPatchStatus) healthParts.push({ label: 'Patches', value: s.securityPatchStatus });
-            if (s.timeSyncStatus) healthParts.push({ label: 'NTP Sync', value: s.timeSyncStatus });
-            if (s.serviceHealth) {
-                const sh = s.serviceHealth;
-                const svc = `${sh.running}/${sh.total} running`;
-                healthParts.push({ label: 'Services', value: svc + (sh.failed > 0 ? ` (${sh.failed} failed)` : '') });
+            if (s.securityPatchStatus) healthParts.push({label:'Patches',value:s.securityPatchStatus});
+            if (s.timeSyncStatus) healthParts.push({label:'NTP Sync',value:s.timeSyncStatus});
+            if (s.serviceHealth) { const sh=s.serviceHealth; healthParts.push({label:'Services',value:`${sh.running}/${sh.total} running`+(sh.failed>0?` (${sh.failed} failed)`:'')}); }
+            if (s.lastReboot) { const d=new Date(s.lastReboot); healthParts.push({label:'Last Reboot',value:d.toLocaleDateString()+' '+d.toLocaleTimeString()}); }
+            if (healthParts.length > 0) { grid.appendChild(makeCard('System Health', healthParts.map(h=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0;border-bottom:1px solid #334155"><span style="font-size:0.8125rem;color:#94a3b8">${esc(h.label)}</span><span style="font-size:0.8125rem;color:#cbd5e1;text-align:right;max-width:60%">${esc(h.value)}</span></div>`).join(''))); }
+        }
+        function makeCard(label, innerHtml) { const c = document.createElement('div'); c.className = 'dash-card'; c.innerHTML = `<div class="dash-card-label">${esc(label)}</div>${innerHtml}`; return c; }
+
+        // ══════════════════════════════════════════════════
+        // ── PAGE MODE: Widget grid engine + 10 widgets ──
+        // ══════════════════════════════════════════════════
+
+        // WMO weather codes to icon descriptions
+        const WMO_ICONS = {0:'\u2600',1:'\u{1F324}',2:'\u26C5',3:'\u2601',45:'\u{1F32B}',48:'\u{1F32B}',51:'\u{1F326}',53:'\u{1F326}',55:'\u{1F326}',61:'\u{1F327}',63:'\u{1F327}',65:'\u{1F327}',71:'\u{1F328}',73:'\u{1F328}',75:'\u{1F328}',77:'\u{1F328}',80:'\u{1F326}',81:'\u{1F327}',82:'\u{1F327}',85:'\u{1F328}',86:'\u{1F328}',95:'\u26C8',96:'\u26C8',99:'\u26C8'};
+        function wmoIcon(code) { return WMO_ICONS[code] || '\u2601'; }
+
+        async function getLocation() {
+            if (cachedLocation) return cachedLocation;
+            const stored = localStorage.getItem('kiosk_location');
+            if (stored) { cachedLocation = JSON.parse(stored); return cachedLocation; }
+            try {
+                const r = await fetch('https://ipapi.co/json/');
+                const d = await r.json();
+                cachedLocation = { lat: d.latitude, lon: d.longitude, city: d.city || 'Unknown' };
+                localStorage.setItem('kiosk_location', JSON.stringify(cachedLocation));
+            } catch { cachedLocation = { lat: 40.7128, lon: -74.006, city: 'New York' }; }
+            return cachedLocation;
+        }
+
+        // Widget registry
+        const WIDGETS = {
+            'stats-primary': { label: 'System Stats', init: initStatsPrimary, update: updateStatsPrimary },
+            'stats-secondary': { label: 'Disk / Network', init: initStatsSecondary, update: updateStatsSecondary },
+            'weather-current': { label: 'Weather', init: initWeatherCurrent },
+            'weather-forecast': { label: '7-Day Forecast', init: initWeatherForecast },
+            'clock-calendar': { label: 'Clock / Calendar', init: initClockCalendar },
+            'news': { label: 'News', init: initNews },
+            'crypto': { label: 'Crypto', init: initCrypto },
+            'iss-tracker': { label: 'ISS Tracker', init: initISS },
+            'astronomy': { label: 'Astronomy', init: initAstronomy },
+            'world-clocks': { label: 'World Clocks', init: initWorldClocks },
+            'ambient-photo': { label: '', init: initAmbientPhoto },
+        };
+
+        function initPage(layout, widgets) {
+            const grid = document.getElementById('page-grid');
+            grid.innerHTML = '';
+            pageWidgets = [];
+            pageTimers = [];
+
+            if (!widgets || widgets.length === 0) return;
+
+            // Determine grid dimensions from placements
+            let maxCol = 1, maxRow = 1;
+            for (const w of widgets) {
+                if (w.col + w.w - 1 > maxCol) maxCol = w.col + w.w - 1;
+                if (w.row + w.h - 1 > maxRow) maxRow = w.row + w.h - 1;
             }
-            if (s.lastReboot) {
-                const d = new Date(s.lastReboot);
-                healthParts.push({ label: 'Last Reboot', value: d.toLocaleDateString() + ' ' + d.toLocaleTimeString() });
+            grid.style.gridTemplateColumns = `repeat(${maxCol}, 1fr)`;
+            grid.style.gridTemplateRows = `repeat(${maxRow}, 1fr)`;
+
+            for (const placement of widgets) {
+                const def = WIDGETS[placement.type];
+                if (!def) continue;
+
+                const card = document.createElement('div');
+                card.className = 'widget-card';
+                card.style.gridColumn = `${placement.col} / span ${placement.w}`;
+                card.style.gridRow = `${placement.row} / span ${placement.h}`;
+                if (def.label) card.innerHTML = `<div class="widget-card-label">${esc(def.label)}</div><div class="widget-card-body"></div>`;
+                else card.innerHTML = `<div class="widget-card-body" style="padding:0"></div>`;
+                grid.appendChild(card);
+
+                const body = card.querySelector('.widget-card-body');
+                const instance = { type: placement.type, el: body, config: placement.config || {} };
+                pageWidgets.push(instance);
+                if (def.init) def.init(instance);
             }
-            if (healthParts.length > 0) {
-                const html = healthParts.map(h => `
-                    <div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0;border-bottom:1px solid #334155">
-                        <span style="font-size:0.8125rem;color:#94a3b8">${esc(h.label)}</span>
-                        <span style="font-size:0.8125rem;color:#cbd5e1;text-align:right;max-width:60%">${esc(h.value)}</span>
-                    </div>
-                `).join('');
-                grid.appendChild(makeCard('System Health', html));
+
+            if (latestStats) updatePageStats(latestStats);
+        }
+
+        function destroyPage() {
+            for (const t of pageTimers) clearInterval(t);
+            pageTimers = [];
+            pageWidgets = [];
+        }
+
+        function updatePageStats(s) {
+            for (const w of pageWidgets) {
+                const def = WIDGETS[w.type];
+                if (def && def.update) def.update(w, s);
             }
         }
 
-        function makeCard(label, innerHtml) {
-            const card = document.createElement('div');
-            card.className = 'dash-card';
-            card.innerHTML = `<div class="dash-card-label">${esc(label)}</div>${innerHtml}`;
-            return card;
+        // ── Widget: stats-primary (CPU, Memory, Battery) ──
+        function initStatsPrimary(inst) { inst.el.innerHTML = '<div class="wc-sub">Waiting for stats\u2026</div>'; }
+        function updateStatsPrimary(inst, s) {
+            const cpuPct = Math.round(s.cpu || 0);
+            let h = `<div class="wc-row" style="margin-bottom:0.75rem"><div class="ring-gauge" style="width:64px;height:64px"><svg viewBox="0 0 100 100" width="64" height="64"><circle class="ring-bg" cx="50" cy="50" r="42"/><circle class="ring-fill" cx="50" cy="50" r="42" stroke="${ringColor(cpuPct)}" stroke-dasharray="${2*Math.PI*42}" stroke-dashoffset="${2*Math.PI*42*(1-cpuPct/100)}"/></svg><div class="ring-label" style="font-size:0.875rem">${cpuPct}%</div></div><div><div style="font-size:0.8125rem;color:#f1f5f9;font-weight:600">CPU</div><div class="wc-sub">${s.cpus||0} cores</div></div></div>`;
+            if (s.mem) { const mp = s.mem.total ? Math.round(s.mem.used/s.mem.total*100) : 0; h += `<div style="margin-bottom:0.5rem"><div style="font-size:0.75rem;color:#94a3b8">Memory ${mp}%</div><div class="gauge-track" style="margin-top:0.25rem"><div class="gauge-fill ${gaugeColor(mp)}" style="width:${mp}%"></div></div><div class="wc-sub">${fmtBytes(s.mem.used)} / ${fmtBytes(s.mem.total)}</div></div>`; }
+            if (s.battery && s.battery.devices && s.battery.devices.length > 0) { const d = s.battery.devices[0]; const p = Math.round(d.percent||0); h += `<div><div style="font-size:0.75rem;color:#94a3b8">Battery ${p}% ${d.status==='charging'?'\u26A1':''}</div><div class="gauge-track" style="margin-top:0.25rem"><div class="gauge-fill" style="width:${p}%;background:${p>50?'#22c55e':p>20?'#eab308':'#ef4444'}"></div></div></div>`; }
+            if (s.load) { h += `<div style="margin-top:0.5rem" class="load-row"><div class="load-item"><div class="load-value" style="font-size:0.875rem">${s.load.load1?.toFixed(2)??'-'}</div><div class="load-label">1m</div></div><div class="load-item"><div class="load-value" style="font-size:0.875rem">${s.load.load5?.toFixed(2)??'-'}</div><div class="load-label">5m</div></div><div class="load-item"><div class="load-value" style="font-size:0.875rem">${s.load.load15?.toFixed(2)??'-'}</div><div class="load-label">15m</div></div></div>`; }
+            inst.el.innerHTML = h;
         }
 
-        function esc(str) {
-            const d = document.createElement('div');
-            d.textContent = str || '';
-            return d.innerHTML;
+        // ── Widget: stats-secondary (Disk, Network, Thermal) ──
+        function initStatsSecondary(inst) { inst.el.innerHTML = '<div class="wc-sub">Waiting for stats\u2026</div>'; }
+        function updateStatsSecondary(inst, s) {
+            let h = '';
+            if (s.disk && s.disk.length > 0) { for (const d of s.disk.slice(0,4)) { const p=Math.round(d.capacity||0); h+=`<div class="disk-row"><span class="disk-mount">${esc(d.mount)}</span><div class="disk-bar-wrap"><div class="disk-bar-fill ${gaugeColor(p)}" style="width:${p}%"></div></div><span class="disk-pct">${p}%</span></div>`; } }
+            if (s.netIfaces && s.netIfaces.length > 0) { h += '<div style="margin-top:0.5rem;border-top:1px solid #334155;padding-top:0.5rem">'; for (const n of s.netIfaces.slice(0,4)) { h += `<div class="net-row"><span class="net-name">${esc(n.name)}</span><span class="net-addr">${esc(n.address)}</span></div>`; } h += '</div>'; }
+            if (s.thermal && s.thermal.length > 0) { const chips = s.thermal.filter(t=>t.temperature>0).slice(0,4).map(t=>`<div class="thermal-chip"><span class="thermal-chip-name">${esc(t.label||t.sensorKey||'?')}</span><span class="thermal-chip-val">${t.temperature.toFixed(0)}\u00B0C</span></div>`).join(''); if (chips) h += `<div style="margin-top:0.5rem;border-top:1px solid #334155;padding-top:0.5rem"><div class="thermal-list">${chips}</div></div>`; }
+            inst.el.innerHTML = h || '<div class="wc-sub">No data</div>';
         }
 
-        function cap(str) {
-            if (!str) return '';
-            return str.charAt(0).toUpperCase() + str.slice(1);
+        // ── Widget: weather-current ──
+        function initWeatherCurrent(inst) {
+            inst.el.innerHTML = '<div class="wc-sub">Loading weather\u2026</div>';
+            async function fetchWeather() {
+                const loc = inst.config.lat ? { lat: inst.config.lat, lon: inst.config.lon, city: inst.config.city || '' } : await getLocation();
+                try {
+                    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}&current_weather=true&hourly=temperature_2m,weathercode&timezone=auto&forecast_days=1`);
+                    const d = await r.json();
+                    const cw = d.current_weather;
+                    let h = `<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem"><span style="font-size:2rem">${wmoIcon(cw.weathercode)}</span><div><div class="wc-val">${cw.temperature}\u00B0C</div><div class="wc-sub">${esc(loc.city)} &middot; Wind ${cw.windspeed} km/h</div></div></div>`;
+                    if (d.hourly && d.hourly.temperature_2m) {
+                        const temps = d.hourly.temperature_2m.slice(0, 24);
+                        const mn = Math.min(...temps), mx = Math.max(...temps), rng = mx - mn || 1;
+                        h += '<div style="display:flex;align-items:flex-end;gap:1px;height:40px;margin-top:0.5rem">';
+                        for (const t of temps) { const pct = ((t-mn)/rng)*100; h += `<div style="flex:1;background:#3b82f6;border-radius:1px 1px 0 0;height:${Math.max(pct,5)}%;opacity:0.7"></div>`; }
+                        h += '</div><div class="wc-sub" style="display:flex;justify-content:space-between"><span>00:00</span><span>23:00</span></div>';
+                    }
+                    inst.el.innerHTML = h;
+                } catch { inst.el.innerHTML = '<div class="wc-sub">Weather unavailable</div>'; }
+            }
+            fetchWeather();
+            pageTimers.push(setInterval(fetchWeather, 600000));
+        }
+
+        // ── Widget: weather-forecast ──
+        function initWeatherForecast(inst) {
+            inst.el.innerHTML = '<div class="wc-sub">Loading forecast\u2026</div>';
+            async function fetchForecast() {
+                const loc = inst.config.lat ? { lat: inst.config.lat, lon: inst.config.lon } : await getLocation();
+                try {
+                    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto`);
+                    const d = await r.json();
+                    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+                    let h = '';
+                    const allMin = Math.min(...d.daily.temperature_2m_min), allMax = Math.max(...d.daily.temperature_2m_max), rng = allMax - allMin || 1;
+                    for (let i = 0; i < Math.min(d.daily.time.length, 7); i++) {
+                        const dt = new Date(d.daily.time[i] + 'T00:00');
+                        const dn = i === 0 ? 'Today' : days[dt.getDay()];
+                        const lo = Math.round(d.daily.temperature_2m_min[i]), hi = Math.round(d.daily.temperature_2m_max[i]);
+                        const left = ((lo-allMin)/rng)*100, width = ((hi-lo)/rng)*100;
+                        h += `<div class="forecast-day"><span class="forecast-day-name">${dn}</span><span>${wmoIcon(d.daily.weathercode[i])}</span><span class="forecast-lo">${lo}\u00B0</span><div class="forecast-bar"><div class="forecast-bar-fill" style="left:${left}%;width:${Math.max(width,4)}%"></div></div><span class="forecast-hi">${hi}\u00B0</span></div>`;
+                    }
+                    inst.el.innerHTML = h;
+                } catch { inst.el.innerHTML = '<div class="wc-sub">Forecast unavailable</div>'; }
+            }
+            fetchForecast();
+            pageTimers.push(setInterval(fetchForecast, 1800000));
+        }
+
+        // ── Widget: clock-calendar ──
+        function initClockCalendar(inst) {
+            function render() {
+                const now = new Date();
+                const h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
+                const hAngle = (h % 12 + m / 60) * 30, mAngle = (m + s / 60) * 6, sAngle = s * 6;
+                let html = `<div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.75rem"><svg viewBox="0 0 100 100" width="80" height="80"><circle cx="50" cy="50" r="45" fill="none" stroke="#334155" stroke-width="2"/>`;
+                for (let i = 0; i < 12; i++) { const a = i * 30 * Math.PI / 180; html += `<line x1="${50+38*Math.sin(a)}" y1="${50-38*Math.cos(a)}" x2="${50+42*Math.sin(a)}" y2="${50-42*Math.cos(a)}" stroke="#64748b" stroke-width="1.5"/>`; }
+                html += `<line x1="50" y1="50" x2="${50+25*Math.sin(hAngle*Math.PI/180)}" y2="${50-25*Math.cos(hAngle*Math.PI/180)}" stroke="#f1f5f9" stroke-width="2.5" stroke-linecap="round"/>`;
+                html += `<line x1="50" y1="50" x2="${50+35*Math.sin(mAngle*Math.PI/180)}" y2="${50-35*Math.cos(mAngle*Math.PI/180)}" stroke="#f1f5f9" stroke-width="1.5" stroke-linecap="round"/>`;
+                html += `<line x1="50" y1="50" x2="${50+38*Math.sin(sAngle*Math.PI/180)}" y2="${50-38*Math.cos(sAngle*Math.PI/180)}" stroke="#ef4444" stroke-width="0.8" stroke-linecap="round"/>`;
+                html += `<circle cx="50" cy="50" r="2" fill="#f1f5f9"/></svg>`;
+                html += `<div><div class="wc-val">${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}</div><div class="wc-sub">${now.toLocaleDateString(undefined, {weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div></div></div>`;
+
+                // Calendar
+                const yr = now.getFullYear(), mo = now.getMonth();
+                const firstDay = new Date(yr, mo, 1).getDay(), daysInMonth = new Date(yr, mo + 1, 0).getDate();
+                html += '<table class="cal-table"><tr><th>S</th><th>M</th><th>T</th><th>W</th><th>T</th><th>F</th><th>S</th></tr><tr>';
+                for (let i = 0; i < firstDay; i++) html += '<td></td>';
+                for (let d = 1; d <= daysInMonth; d++) {
+                    const dow = (firstDay + d - 1) % 7;
+                    html += `<td class="${d===now.getDate()?'today':''}">${d}</td>`;
+                    if (dow === 6 && d < daysInMonth) html += '</tr><tr>';
+                }
+                html += '</tr></table>';
+                inst.el.innerHTML = html;
+            }
+            render();
+            pageTimers.push(setInterval(render, 1000));
+        }
+
+        // ── Widget: news (WikiMedia) ──
+        function initNews(inst) {
+            inst.el.innerHTML = '<div class="wc-sub">Loading news\u2026</div>';
+            async function fetchNews() {
+                try {
+                    const now = new Date();
+                    const url = `https://api.wikimedia.org/feed/v1/wikipedia/en/featured/${now.getFullYear()}/${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')}`;
+                    const r = await fetch(url);
+                    const d = await r.json();
+                    let h = '';
+                    if (d.tfa) { h += `<div class="news-item"><div class="news-title">${esc(d.tfa.normalizedtitle || d.tfa.title)}</div><div class="news-extract">${esc(d.tfa.extract || '')}</div></div>`; }
+                    if (d.onthisday) { for (const item of d.onthisday.slice(0, 4)) { h += `<div class="news-item"><div class="news-title">${item.year}: ${esc(item.text)}</div></div>`; } }
+                    if (d.mostread && d.mostread.articles) { for (const a of d.mostread.articles.slice(0, 3)) { h += `<div class="news-item"><div class="news-title">${esc(a.normalizedtitle || a.title)}</div><div class="news-extract">${esc(a.extract || '').slice(0,120)}</div></div>`; } }
+                    inst.el.innerHTML = h || '<div class="wc-sub">No articles</div>';
+                } catch { inst.el.innerHTML = '<div class="wc-sub">News unavailable</div>'; }
+            }
+            fetchNews();
+            pageTimers.push(setInterval(fetchNews, 1800000));
+        }
+
+        // ── Widget: crypto (CoinGecko) ──
+        function initCrypto(inst) {
+            const coins = inst.config.coins || ['bitcoin', 'ethereum', 'solana', 'cardano'];
+            inst.el.innerHTML = '<div class="wc-sub">Loading prices\u2026</div>';
+            async function fetchPrices() {
+                try {
+                    const ids = coins.join(',');
+                    const r = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`);
+                    const d = await r.json();
+                    let h = '';
+                    for (const coin of coins) {
+                        const info = d[coin];
+                        if (!info) continue;
+                        const price = info.usd;
+                        const change = info.usd_24h_change;
+                        const changeStr = change != null ? (change >= 0 ? '+' : '') + change.toFixed(2) + '%' : '';
+                        const changeClass = change >= 0 ? 'wc-green' : 'wc-red';
+                        const name = coin.charAt(0).toUpperCase() + coin.slice(1);
+                        h += `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0;border-bottom:1px solid #334155"><span style="font-size:0.8125rem;color:#cbd5e1">${esc(name)}</span><div style="text-align:right"><span style="font-size:0.875rem;font-weight:600;color:#f1f5f9">$${price >= 1 ? price.toLocaleString(undefined,{maximumFractionDigits:2}) : price.toFixed(4)}</span> <span class="${changeClass}" style="font-size:0.75rem">${changeStr}</span></div></div>`;
+                    }
+                    inst.el.innerHTML = h || '<div class="wc-sub">No data</div>';
+                } catch { inst.el.innerHTML = '<div class="wc-sub">Prices unavailable</div>'; }
+            }
+            fetchPrices();
+            pageTimers.push(setInterval(fetchPrices, 60000));
+        }
+
+        // ── Widget: ISS Tracker ──
+        function initISS(inst) {
+            inst.el.innerHTML = '<div class="wc-sub">Loading ISS\u2026</div>';
+            let crewCount = '?';
+            async function fetchCrew() { try { const r = await fetch('http://api.open-notify.org/astros.json'); const d = await r.json(); crewCount = d.number || d.people?.length || '?'; } catch {} }
+            async function fetchPos() {
+                try {
+                    const r = await fetch('http://api.open-notify.org/iss-now.json');
+                    const d = await r.json();
+                    const lat = parseFloat(d.iss_position.latitude), lon = parseFloat(d.iss_position.longitude);
+                    const x = ((lon + 180) / 360) * 360, y = ((90 - lat) / 180) * 180;
+                    inst.el.innerHTML = `<div class="iss-map-wrap"><svg viewBox="0 0 360 180" preserveAspectRatio="xMidYMid meet"><rect width="360" height="180" fill="#0f172a"/><path d="M0,90 Q90,80 180,90 Q270,100 360,90" stroke="#1e293b" fill="none" stroke-width="0.5"/><line x1="0" y1="90" x2="360" y2="90" stroke="#1e293b" stroke-width="0.3"/><line x1="180" y1="0" x2="180" y2="180" stroke="#1e293b" stroke-width="0.3"/><circle cx="${x}" cy="${y}" r="4" class="iss-dot"><animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/></circle></svg><div class="iss-badge">\u{1F6F0} ${crewCount} crew &middot; ${lat.toFixed(1)}\u00B0, ${lon.toFixed(1)}\u00B0</div></div>`;
+                } catch { inst.el.innerHTML = '<div class="wc-sub">ISS unavailable</div>'; }
+            }
+            fetchCrew();
+            fetchPos();
+            pageTimers.push(setInterval(fetchPos, 10000));
+            pageTimers.push(setInterval(fetchCrew, 1800000));
+        }
+
+        // ── Widget: astronomy (sunrise/sunset + moon phase) ──
+        function initAstronomy(inst) {
+            inst.el.innerHTML = '<div class="wc-sub">Loading astronomy\u2026</div>';
+            async function fetchAstro() {
+                const loc = inst.config.lat ? { lat: inst.config.lat, lon: inst.config.lon } : await getLocation();
+                try {
+                    const r = await fetch(`https://api.sunrise-sunset.org/json?lat=${loc.lat}&lng=${loc.lon}&formatted=0`);
+                    const d = await r.json();
+                    const res = d.results;
+                    const fmtTime = (iso) => { try { return new Date(iso).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); } catch { return '?'; } };
+
+                    // Moon phase calculation (simplified)
+                    const now = new Date();
+                    const synodicMonth = 29.53058770576;
+                    const knownNew = new Date(2000, 0, 6, 18, 14); // Known new moon
+                    const daysSince = (now - knownNew) / 86400000;
+                    const phase = ((daysSince % synodicMonth) + synodicMonth) % synodicMonth;
+                    const phasePct = phase / synodicMonth;
+                    const phaseNames = ['New Moon','Waxing Crescent','First Quarter','Waxing Gibbous','Full Moon','Waning Gibbous','Last Quarter','Waning Crescent'];
+                    const phaseIdx = Math.round(phasePct * 8) % 8;
+                    const moonEmojis = ['\u{1F311}','\u{1F312}','\u{1F313}','\u{1F314}','\u{1F315}','\u{1F316}','\u{1F317}','\u{1F318}'];
+                    const illum = Math.round((1 - Math.abs(2 * phasePct - 1)) * 100);
+
+                    let h = `<div class="moon-wrap"><span style="font-size:2.5rem">${moonEmojis[phaseIdx]}</span><div><div style="font-size:0.875rem;font-weight:600;color:#f1f5f9">${phaseNames[phaseIdx]}</div><div class="wc-sub">${illum}% illumination</div></div></div>`;
+                    h += `<div class="sun-times" style="margin-top:0.75rem"><span>\u{1F305} Sunrise: ${fmtTime(res.sunrise)}</span><span>\u{1F307} Sunset: ${fmtTime(res.sunset)}</span><span>\u2600 Day length: ${res.day_length ? (typeof res.day_length === 'number' ? fmtUptime(res.day_length) : res.day_length) : '?'}</span><span>\u{1F31F} Golden hour: ${fmtTime(res.civil_twilight_end)}</span></div>`;
+                    inst.el.innerHTML = h;
+                } catch { inst.el.innerHTML = '<div class="wc-sub">Astronomy data unavailable</div>'; }
+            }
+            fetchAstro();
+            pageTimers.push(setInterval(fetchAstro, 1800000));
+        }
+
+        // ── Widget: world-clocks ──
+        function initWorldClocks(inst) {
+            const timezones = inst.config.timezones || ['UTC','America/New_York','America/Los_Angeles','Europe/London','Asia/Tokyo','Australia/Sydney'];
+            function render() {
+                let h = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:0.5rem">';
+                for (const tz of timezones) {
+                    const now = new Date();
+                    let timeStr, hours, minutes, seconds;
+                    try {
+                        timeStr = now.toLocaleTimeString('en-US', { timeZone: tz, hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        const parts = timeStr.split(':');
+                        hours = parseInt(parts[0]); minutes = parseInt(parts[1]); seconds = parseInt(parts[2]);
+                    } catch { hours = 0; minutes = 0; seconds = 0; timeStr = '00:00:00'; }
+                    const hAngle = (hours % 12 + minutes / 60) * 30, mAngle = (minutes + seconds / 60) * 6, sAngle = seconds * 6;
+                    const city = tz.split('/').pop().replace(/_/g, ' ');
+                    h += `<div class="analog-clock"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="none" stroke="#334155" stroke-width="1.5"/>`;
+                    for (let i = 0; i < 12; i++) { const a = i*30*Math.PI/180; h += `<circle cx="${50+40*Math.sin(a)}" cy="${50-40*Math.cos(a)}" r="1.5" fill="#475569"/>`; }
+                    h += `<line x1="50" y1="50" x2="${50+22*Math.sin(hAngle*Math.PI/180)}" y2="${50-22*Math.cos(hAngle*Math.PI/180)}" stroke="#f1f5f9" stroke-width="2" stroke-linecap="round"/>`;
+                    h += `<line x1="50" y1="50" x2="${50+32*Math.sin(mAngle*Math.PI/180)}" y2="${50-32*Math.cos(mAngle*Math.PI/180)}" stroke="#cbd5e1" stroke-width="1.5" stroke-linecap="round"/>`;
+                    h += `<line x1="50" y1="50" x2="${50+35*Math.sin(sAngle*Math.PI/180)}" y2="${50-35*Math.cos(sAngle*Math.PI/180)}" stroke="#ef4444" stroke-width="0.5"/>`;
+                    h += `<circle cx="50" cy="50" r="2" fill="#f1f5f9"/></svg>`;
+                    h += `<div class="clock-digital">${timeStr}</div><div class="clock-city">${esc(city)}</div></div>`;
+                }
+                h += '</div>';
+                inst.el.innerHTML = h;
+            }
+            render();
+            pageTimers.push(setInterval(render, 1000));
+        }
+
+        // ── Widget: ambient-photo ──
+        function initAmbientPhoto(inst) {
+            const el = inst.el;
+            el.innerHTML = '<div class="ambient-strip"><img src="" alt=""></div>';
+            const img = el.querySelector('img');
+            function loadPhoto() {
+                const w = el.offsetWidth || 800, h = el.offsetHeight || 200;
+                img.src = `https://picsum.photos/${w}/${h}?random=${Date.now()}`;
+            }
+            loadPhoto();
+            pageTimers.push(setInterval(loadPhoto, 300000));
         }
 
         // ── WebSocket lifecycle ──
-        function startPing() {
-            stopPing();
-            pingTimer = setInterval(() => {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'ping' }));
-                }
-            }, 30000);
-        }
-
-        function stopPing() {
-            if (pingTimer) {
-                clearInterval(pingTimer);
-                pingTimer = null;
-            }
-        }
-
-        function scheduleReconnect() {
-            if (reconnectTimer) return;
-            reconnectTimer = setTimeout(() => {
-                reconnectTimer = null;
-                connect();
-            }, 2000);
-        }
+        function startPing() { stopPing(); pingTimer = setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type:'ping'})); }, 30000); }
+        function stopPing() { if (pingTimer) { clearInterval(pingTimer); pingTimer = null; } }
+        function scheduleReconnect() { if (reconnectTimer) return; reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 2000); }
 
         connect();
     </script>

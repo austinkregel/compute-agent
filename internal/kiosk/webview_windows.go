@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"syscall"
 )
 
@@ -46,38 +47,74 @@ func findChromePath() string {
 	return ""
 }
 
+func winBrowserArgs(browserPath, url string, fullscreen bool) []string {
+	isEdge := filepath.Base(browserPath) == "msedge.exe"
+	if fullscreen {
+		if isEdge {
+			return []string{"--kiosk", "--edge-kiosk-type=fullscreen", url}
+		}
+		return []string{"--kiosk", url}
+	}
+	return []string{"--app=" + url}
+}
+
 // launchWebView opens a browser in kiosk mode pointing to the given URL.
-// This provides a chromeless fullscreen experience on Windows.
+// It re-launches the browser when navigateWebView signals a new URL.
 func launchWebView(url string, fullscreen bool) error {
 	var browserPath string
-	var args []string
 
-	// Try Edge first
 	if edgePath := findEdgePath(); edgePath != "" {
 		browserPath = edgePath
-		if fullscreen {
-			args = []string{"--kiosk", "--edge-kiosk-type=fullscreen", url}
-		} else {
-			args = []string{"--app=" + url}
-		}
 	} else if chromePath := findChromePath(); chromePath != "" {
-		// Fall back to Chrome
 		browserPath = chromePath
-		if fullscreen {
-			args = []string{"--kiosk", url}
-		} else {
-			args = []string{"--app=" + url}
-		}
 	} else {
 		return errors.New("kiosk mode requires Microsoft Edge or Google Chrome; neither was found")
 	}
 
-	cmd := exec.Command(browserPath, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	var (
+		procMu sync.Mutex
+		proc   *os.Process
+		navCh  = make(chan string, 1)
+	)
 
-	if err := cmd.Start(); err != nil {
-		return err
+	registerNavigate(func(newURL string) {
+		// Replace any pending URL, then kill the current browser.
+		select {
+		case <-navCh:
+		default:
+		}
+		navCh <- newURL
+
+		procMu.Lock()
+		if proc != nil {
+			_ = proc.Kill()
+		}
+		procMu.Unlock()
+	})
+	defer registerNavigate(nil)
+
+	currentURL := url
+	for {
+		args := winBrowserArgs(browserPath, currentURL, fullscreen)
+		cmd := exec.Command(browserPath, args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+
+		procMu.Lock()
+		proc = cmd.Process
+		procMu.Unlock()
+
+		_ = cmd.Wait()
+
+		select {
+		case newURL := <-navCh:
+			currentURL = newURL
+			continue
+		default:
+			return nil
+		}
 	}
-
-	return cmd.Wait()
 }
