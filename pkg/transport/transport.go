@@ -77,6 +77,24 @@ type Handlers struct {
 	KioskSet        func(KioskSetRequest)
 	KioskSaveLayout func(KioskSaveLayoutRequest)
 	KioskGetLayouts func(KioskGetLayoutsRequest)
+
+	// Docker/Swarm handlers
+	SwarmInfo          func(SwarmInfoRequest)
+	SwarmInit          func(SwarmInitRequest)
+	SwarmJoin          func(SwarmJoinRequest)
+	SwarmLeave         func(SwarmLeaveRequest)
+	SwarmNodeUpdate    func(SwarmNodeUpdateRequest)
+	SwarmNodeList      func(SwarmNodeListRequest)
+	SwarmServiceList   func(SwarmServiceListRequest)
+	SwarmServiceCreate func(SwarmServiceCreateRequest)
+	SwarmServiceUpdate func(SwarmServiceUpdateRequest)
+	SwarmServiceRemove func(SwarmServiceRemoveRequest)
+	SwarmServiceLogs   func(SwarmServiceLogsRequest)
+	SwarmNetworkList   func(SwarmNetworkListRequest)
+	SwarmNetworkCreate func(SwarmNetworkCreateRequest)
+	SwarmNetworkRemove func(SwarmNetworkRemoveRequest)
+	SwarmStackList     func(SwarmStackListRequest)
+	SwarmStackRemove   func(SwarmStackRemoveRequest)
 }
 
 // AdminCommand mirrors the payload emitted by the control plane.
@@ -937,6 +955,166 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 		}
 		if c.handlers.KioskGetLayouts != nil {
 			c.handlers.KioskGetLayouts(msg)
+		}
+
+	case "swarm_info_request":
+		var msg SwarmInfoRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_info_request", "error", err)
+			return
+		}
+		if c.handlers.SwarmInfo != nil {
+			c.handlers.SwarmInfo(msg)
+		}
+
+	case "swarm_init":
+		var msg SwarmInitRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_init", "error", err)
+			return
+		}
+		if c.handlers.SwarmInit != nil {
+			c.handlers.SwarmInit(msg)
+		}
+
+	case "swarm_join":
+		var msg SwarmJoinRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_join", "error", err)
+			return
+		}
+		if c.handlers.SwarmJoin != nil {
+			c.handlers.SwarmJoin(msg)
+		}
+
+	case "swarm_leave":
+		var msg SwarmLeaveRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_leave", "error", err)
+			return
+		}
+		if c.handlers.SwarmLeave != nil {
+			c.handlers.SwarmLeave(msg)
+		}
+
+	case "swarm_node_update":
+		var msg SwarmNodeUpdateRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_node_update", "error", err)
+			return
+		}
+		if c.handlers.SwarmNodeUpdate != nil {
+			c.handlers.SwarmNodeUpdate(msg)
+		}
+
+	case "swarm_node_list":
+		var msg SwarmNodeListRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_node_list", "error", err)
+			return
+		}
+		if c.handlers.SwarmNodeList != nil {
+			c.handlers.SwarmNodeList(msg)
+		}
+
+	case "swarm_service_list":
+		var msg SwarmServiceListRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_service_list", "error", err)
+			return
+		}
+		if c.handlers.SwarmServiceList != nil {
+			c.handlers.SwarmServiceList(msg)
+		}
+
+	case "swarm_service_create":
+		var msg SwarmServiceCreateRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_service_create", "error", err)
+			return
+		}
+		if c.handlers.SwarmServiceCreate != nil {
+			c.handlers.SwarmServiceCreate(msg)
+		}
+
+	case "swarm_service_update":
+		var msg SwarmServiceUpdateRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_service_update", "error", err)
+			return
+		}
+		if c.handlers.SwarmServiceUpdate != nil {
+			c.handlers.SwarmServiceUpdate(msg)
+		}
+
+	case "swarm_service_remove":
+		var msg SwarmServiceRemoveRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_service_remove", "error", err)
+			return
+		}
+		if c.handlers.SwarmServiceRemove != nil {
+			c.handlers.SwarmServiceRemove(msg)
+		}
+
+	case "swarm_service_logs":
+		var msg SwarmServiceLogsRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_service_logs", "error", err)
+			return
+		}
+		if c.handlers.SwarmServiceLogs != nil {
+			c.handlers.SwarmServiceLogs(msg)
+		}
+
+	case "swarm_network_list":
+		var msg SwarmNetworkListRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_network_list", "error", err)
+			return
+		}
+		if c.handlers.SwarmNetworkList != nil {
+			c.handlers.SwarmNetworkList(msg)
+		}
+
+	case "swarm_network_create":
+		var msg SwarmNetworkCreateRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_network_create", "error", err)
+			return
+		}
+		if c.handlers.SwarmNetworkCreate != nil {
+			c.handlers.SwarmNetworkCreate(msg)
+		}
+
+	case "swarm_network_remove":
+		var msg SwarmNetworkRemoveRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_network_remove", "error", err)
+			return
+		}
+		if c.handlers.SwarmNetworkRemove != nil {
+			c.handlers.SwarmNetworkRemove(msg)
+		}
+
+	case "swarm_stack_list":
+		var msg SwarmStackListRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_stack_list", "error", err)
+			return
+		}
+		if c.handlers.SwarmStackList != nil {
+			c.handlers.SwarmStackList(msg)
+		}
+
+	case "swarm_stack_remove":
+		var msg SwarmStackRemoveRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal swarm_stack_remove", "error", err)
+			return
+		}
+		if c.handlers.SwarmStackRemove != nil {
+			c.handlers.SwarmStackRemove(msg)
 		}
 
 	default:

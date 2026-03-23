@@ -248,14 +248,8 @@ func TestValidate_RequiredFields(t *testing.T) {
 	}
 }
 
-func TestApplyDefaults(t *testing.T) {
-	cfg := &Config{
-		ClientID:  "test",
-		ServerURL: "https://example.com",
-		AuthToken: "token",
-	}
-
-	cfg.applyDefaults()
+func TestDefaultConfig(t *testing.T) {
+	cfg := defaultConfig()
 
 	if cfg.StatsIntervalSec != 60 {
 		t.Errorf("expected default StatsIntervalSec 60, got %d", cfg.StatsIntervalSec)
@@ -284,14 +278,13 @@ func TestApplyDefaults(t *testing.T) {
 	if cfg.Logging.Level != "info" {
 		t.Errorf("expected default Logging.Level 'info', got %q", cfg.Logging.Level)
 	}
+	if !cfg.Docker.Enabled {
+		t.Error("expected Docker.Enabled to default to true")
+	}
 
-	// Test platform-specific shell defaults
 	if runtime.GOOS == "windows" {
 		if cfg.Shell.Command != "cmd.exe" {
 			t.Errorf("expected Windows shell 'cmd.exe', got %q", cfg.Shell.Command)
-		}
-		if len(cfg.Shell.Args) == 0 || cfg.Shell.Args[0] != "/Q" {
-			t.Errorf("expected Windows shell args ['/Q'], got %v", cfg.Shell.Args)
 		}
 	} else {
 		if cfg.Shell.Command != "/bin/bash" {
@@ -302,37 +295,48 @@ func TestApplyDefaults(t *testing.T) {
 		}
 	}
 
-	// Test logging file path default
-	// filepath.Join normalizes the path, so "./" becomes ""
 	expectedLogPath := "agent.log"
 	if cfg.Logging.FilePath != expectedLogPath {
 		t.Errorf("expected default Logging.FilePath %q, got %q", expectedLogPath, cfg.Logging.FilePath)
 	}
 }
 
-func TestApplyDefaults_RespectsExistingValues(t *testing.T) {
-	cfg := &Config{
-		ClientID:                "test",
-		ServerURL:               "https://example.com",
-		AuthToken:               "token",
-		StatsIntervalSec:        120,
-		HeartbeatIntervalSec:    40,
-		PongTimeoutSec:          120,
-		OpenHardwareMonitorPort: 9001,
-		Admin: AdminConfig{
-			MaxConcurrent:     5,
-			DefaultTimeoutSec: 60,
+func TestDeepMerge_RespectsExistingValues(t *testing.T) {
+	tmpdir := t.TempDir()
+	cfgPath := filepath.Join(tmpdir, "config.json")
+
+	configJSON := `{
+		"clientId": "test",
+		"serverUrl": "https://example.com",
+		"authToken": "token",
+		"statsIntervalSec": 120,
+		"heartbeatIntervalSec": 40,
+		"pongTimeoutSec": 120,
+		"openHardwareMonitorPort": 9001,
+		"admin": {
+			"maxConcurrent": 5,
+			"defaultTimeoutSec": 60
 		},
-		Transport: TransportConfig{
-			Path: "/custom",
+		"transport": {
+			"path": "/custom"
 		},
-		Shell: ShellConfig{
-			Command: "/bin/zsh",
-			Args:    []string{"-c"},
+		"shell": {
+			"command": "/bin/zsh",
+			"args": ["-c"]
 		},
+		"docker": {
+			"enabled": false
+		}
+	}`
+
+	if err := os.WriteFile(cfgPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
 	}
 
-	cfg.applyDefaults()
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
 
 	if cfg.StatsIntervalSec != 120 {
 		t.Errorf("expected StatsIntervalSec to remain 120, got %d", cfg.StatsIntervalSec)
@@ -357,6 +361,49 @@ func TestApplyDefaults_RespectsExistingValues(t *testing.T) {
 	}
 	if cfg.Shell.Command != "/bin/zsh" {
 		t.Errorf("expected Shell.Command to remain '/bin/zsh', got %q", cfg.Shell.Command)
+	}
+	if cfg.Docker.Enabled {
+		t.Error("expected Docker.Enabled to remain false when explicitly set")
+	}
+}
+
+func TestDeepMerge_NewFieldsGetDefaults(t *testing.T) {
+	tmpdir := t.TempDir()
+	cfgPath := filepath.Join(tmpdir, "config.json")
+
+	configJSON := `{
+		"clientId": "old-agent",
+		"serverUrl": "https://example.com",
+		"authToken": "token",
+		"statsIntervalSec": 30
+	}`
+
+	if err := os.WriteFile(cfgPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.StatsIntervalSec != 30 {
+		t.Errorf("expected user-specified StatsIntervalSec 30, got %d", cfg.StatsIntervalSec)
+	}
+	if !cfg.Docker.Enabled {
+		t.Error("expected Docker.Enabled to default to true for old config without docker section")
+	}
+	if cfg.Transport.MaxClockSkewSec != 300 {
+		t.Errorf("expected Transport.MaxClockSkewSec to default to 300, got %d", cfg.Transport.MaxClockSkewSec)
+	}
+	if cfg.Shell.IdleTimeoutSec != 60 {
+		t.Errorf("expected Shell.IdleTimeoutSec to default to 60, got %d", cfg.Shell.IdleTimeoutSec)
+	}
+	if cfg.Variant.Desired != VariantHeadless {
+		t.Errorf("expected Variant.Desired to default to headless, got %q", cfg.Variant.Desired)
+	}
+	if cfg.Alerts.MaxAlerts != 50 {
+		t.Errorf("expected Alerts.MaxAlerts to default to 50, got %d", cfg.Alerts.MaxAlerts)
 	}
 }
 

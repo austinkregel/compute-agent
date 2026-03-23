@@ -19,6 +19,7 @@ import (
 	gopsutilnet "github.com/shirou/gopsutil/v3/net"
 
 	"github.com/austinkregel/compute-agent/pkg/config"
+	"github.com/austinkregel/compute-agent/pkg/docker"
 	"github.com/austinkregel/compute-agent/pkg/logging"
 	"github.com/austinkregel/compute-agent/pkg/sysalerts"
 	"github.com/austinkregel/compute-agent/pkg/transport"
@@ -38,11 +39,12 @@ var (
 
 // Publisher periodically gathers system metrics and ships them over the transport.
 type Publisher struct {
-	cfg     *config.Config
-	log     *logging.Logger
-	emitter transport.Emitter
-	updates *UpdateChecker
-	alerts  *sysalerts.Monitor
+	cfg          *config.Config
+	log          *logging.Logger
+	emitter      transport.Emitter
+	updates      *UpdateChecker
+	alerts       *sysalerts.Monitor
+	dockerClient *docker.Client
 
 	// OnSample is called with the raw JSON-encoded StatsSample after each collection.
 	// Used by the kiosk subsystem to display live stats on the dashboard view.
@@ -90,6 +92,23 @@ func NewPublisher(cfg *config.Config, log *logging.Logger, emitter transport.Emi
 		p.alerts.Scan()
 	}
 	return p
+}
+
+// SetDockerClient wires a Docker client for inclusion in telemetry.
+// Pass nil if Docker is disabled or unavailable.
+func (p *Publisher) SetDockerClient(c *docker.Client) {
+	if p == nil {
+		return
+	}
+	p.dockerClient = c
+}
+
+// DockerClient returns the Docker client (may be nil).
+func (p *Publisher) DockerClient() *docker.Client {
+	if p == nil {
+		return nil
+	}
+	return p.dockerClient
 }
 
 // Run blocks, emitting stats until context cancellation.
@@ -377,6 +396,16 @@ func (p *Publisher) emitSample() {
 		}
 	}
 
+	// Docker/Swarm status
+	if p.dockerClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ds := p.dockerClient.CollectStatus(ctx)
+		cancel()
+		if ds != nil {
+			sample.Docker = ds
+		}
+	}
+
 	if err := p.emitter.Emit("stats", map[string]any{"data": sample}); err != nil {
 		p.log.Debug("skipping stats emit (transport offline)", "error", err)
 	}
@@ -540,6 +569,7 @@ type StatsSample struct {
 	ServiceHealth       *ServiceHealth           `json:"serviceHealth,omitempty"`
 	TimeSyncStatus      string                   `json:"timeSyncStatus,omitempty"`
 	Alerts              *sysalerts.AlertSnapshot `json:"alerts,omitempty"`
+	Docker              *docker.DockerStatus     `json:"docker,omitempty"`
 	Timestamp           string                   `json:"ts"`
 }
 

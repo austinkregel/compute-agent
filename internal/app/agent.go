@@ -20,6 +20,7 @@ import (
 	"github.com/austinkregel/compute-agent/pkg/backup"
 	"github.com/austinkregel/compute-agent/pkg/config"
 	"github.com/austinkregel/compute-agent/pkg/dirbrowse"
+	"github.com/austinkregel/compute-agent/pkg/docker"
 	"github.com/austinkregel/compute-agent/pkg/fileops"
 	"github.com/austinkregel/compute-agent/pkg/logging"
 	"github.com/austinkregel/compute-agent/pkg/telemetry"
@@ -133,6 +134,23 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		KioskSet:        agent.handleKioskSet,
 		KioskSaveLayout: agent.handleKioskSaveLayout,
 		KioskGetLayouts: agent.handleKioskGetLayouts,
+
+		SwarmInfo:          agent.handleSwarmInfo,
+		SwarmInit:          agent.handleSwarmInit,
+		SwarmJoin:          agent.handleSwarmJoin,
+		SwarmLeave:         agent.handleSwarmLeave,
+		SwarmNodeUpdate:    agent.handleSwarmNodeUpdate,
+		SwarmNodeList:      agent.handleSwarmNodeList,
+		SwarmServiceList:   agent.handleSwarmServiceList,
+		SwarmServiceCreate: agent.handleSwarmServiceCreate,
+		SwarmServiceUpdate: agent.handleSwarmServiceUpdate,
+		SwarmServiceRemove: agent.handleSwarmServiceRemove,
+		SwarmServiceLogs:   agent.handleSwarmServiceLogs,
+		SwarmNetworkList:   agent.handleSwarmNetworkList,
+		SwarmNetworkCreate: agent.handleSwarmNetworkCreate,
+		SwarmNetworkRemove: agent.handleSwarmNetworkRemove,
+		SwarmStackList:     agent.handleSwarmStackList,
+		SwarmStackRemove:   agent.handleSwarmStackRemove,
 	}
 
 	t, err := transport.New(transport.Config{
@@ -154,6 +172,17 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 
 	backupCoord := backup.NewCoordinator(cfg, log.With("component", "backup"), t)
 	pub := telemetry.NewPublisher(cfg, log.With("component", "telemetry"), t)
+
+	// Wire Docker client if enabled
+	if cfg.Docker.Enabled {
+		dc := docker.NewClient(cfg.Docker.SocketPath)
+		if dc != nil {
+			log.Info("docker integration enabled", "available", dc.Available())
+			pub.SetDockerClient(dc)
+		} else {
+			log.Info("docker integration enabled but daemon unavailable; degrading gracefully")
+		}
+	}
 
 	agent.transport = t
 	agent.telemetry = pub

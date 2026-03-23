@@ -34,6 +34,13 @@ type Config struct {
 	Kiosk          KioskConfig        `json:"kiosk"`
 	Alerts         AlertsConfig       `json:"alerts"`
 	Variant        VariantConfig      `json:"variant"`
+	Docker         DockerConfig       `json:"docker"`
+}
+
+// DockerConfig controls Docker integration and Swarm management.
+type DockerConfig struct {
+	Enabled    bool   `json:"enabled"`
+	SocketPath string `json:"socketPath,omitempty"`
 }
 
 // KioskConfig controls the optional kiosk mode (fullscreen WebView display).
@@ -178,18 +185,23 @@ func DefaultPath() string {
 	return filepath.Join(".", "agent-config.json")
 }
 
-// Load reads the config file, applies env overrides, defaults, and validation.
+// Load reads the config file, deep-merges it over the built-in defaults,
+// applies env overrides, and validates the result.
+//
+// Because we unmarshal the user's JSON into a pre-populated struct, any
+// fields absent from the file keep their default values. This prevents
+// configuration drift when new fields are added across releases.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	var cfg Config
+	cfg := defaultConfig()
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	cfg.applyEnvOverrides()
-	cfg.applyDefaults()
+	cfg.applyPostMerge()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -209,103 +221,83 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func (c *Config) applyDefaults() {
-	if c.StatsIntervalSec <= 0 {
-		c.StatsIntervalSec = 60
+// defaultConfig returns a Config pre-populated with all built-in defaults.
+// Load() unmarshals the user's JSON file into this struct, so any fields
+// not present in the file keep their default values automatically.
+func defaultConfig() Config {
+	enabled := true
+	shellCmd := "/bin/bash"
+	shellArgs := []string{"-l"}
+	if runtime.GOOS == "windows" {
+		shellCmd = "cmd.exe"
+		shellArgs = []string{"/Q"}
 	}
-	if c.HeartbeatIntervalSec <= 0 {
-		c.HeartbeatIntervalSec = 20
+
+	return Config{
+		StatsIntervalSec:         60,
+		HeartbeatIntervalSec:     20,
+		UpdateCheckEnabled:       &enabled,
+		UpdateCheckIntervalHours: 12,
+		OpenHardwareMonitorPort:  8085,
+		PongTimeoutSec:           90,
+		Connectivity: ConnectivityConfig{
+			TCPTestPort: 53,
+		},
+		Admin: AdminConfig{
+			MaxConcurrent:     1,
+			DefaultTimeoutSec: 30,
+		},
+		Transport: TransportConfig{
+			Path:            "/ws/agent",
+			MaxClockSkewSec: 300,
+		},
+		Shell: ShellConfig{
+			Command:        shellCmd,
+			Args:           shellArgs,
+			IdleTimeoutSec: 60,
+		},
+		Logging: LoggingConfig{
+			FilePath: filepath.Join(".", "agent.log"),
+			Level:    "info",
+		},
+		DirBrowse: DirBrowseConfig{
+			SSHHostKeyPolicy: "known_hosts",
+			SMBProfiles:      map[string]SMBProfile{},
+		},
+		Kiosk: KioskConfig{
+			ListenAddr: "127.0.0.1:0",
+		},
+		Alerts: AlertsConfig{
+			Enabled:         runtime.GOOS == "linux",
+			ScanIntervalSec: 300,
+			MaxAlerts:       50,
+			LookbackHours:   24,
+		},
+		Variant: VariantConfig{
+			Desired: VariantHeadless,
+		},
+		Docker: DockerConfig{
+			Enabled: true,
+		},
 	}
-	// Updates: enabled by default, run every 12 hours.
-	if c.UpdateCheckIntervalHours <= 0 {
-		c.UpdateCheckIntervalHours = 12
+}
+
+// applyPostMerge handles cross-field dependencies that can't be expressed as
+// simple static defaults (e.g., one field's default depends on another's value).
+func (c *Config) applyPostMerge() {
+	// LOG_FILE env var overrides when no explicit file path was provided
+	if env := os.Getenv("LOG_FILE"); env != "" {
+		c.Logging.FilePath = env
 	}
-	if c.UpdateCheckEnabled == nil {
-		v := true
-		c.UpdateCheckEnabled = &v
-	}
-	if c.OpenHardwareMonitorPort <= 0 {
-		c.OpenHardwareMonitorPort = 8085
-	}
-	if c.PongTimeoutSec <= 0 {
-		c.PongTimeoutSec = 90
-	}
-	if c.Connectivity.TCPTestPort == 0 {
-		c.Connectivity.TCPTestPort = 53
-	}
-	if c.Admin.MaxConcurrent <= 0 {
-		c.Admin.MaxConcurrent = 1
-	}
-	if c.Admin.DefaultTimeoutSec <= 0 {
-		c.Admin.DefaultTimeoutSec = 30
-	}
+
+	// Rate-limit window defaults to 60s only when a rate limit is configured
 	if c.Admin.RateLimitMax > 0 && c.Admin.RateLimitWindowSec <= 0 {
 		c.Admin.RateLimitWindowSec = 60
 	}
-	if c.Transport.Path == "" {
-		c.Transport.Path = "/ws/agent"
-	}
-	if c.Transport.MaxClockSkewSec <= 0 {
-		c.Transport.MaxClockSkewSec = 300 // 5 minutes
-	}
-	if c.Shell.Command == "" {
-		if runtime.GOOS == "windows" {
-			c.Shell.Command = "cmd.exe"
-			c.Shell.Args = []string{"/Q"}
-		} else {
-			c.Shell.Command = "/bin/bash"
-			if len(c.Shell.Args) == 0 {
-				c.Shell.Args = []string{"-l"}
-			}
-		}
-	}
-	if c.Shell.IdleTimeoutSec <= 0 {
-		c.Shell.IdleTimeoutSec = 60
-	}
-	if c.Logging.FilePath == "" {
-		if env := os.Getenv("LOG_FILE"); env != "" {
-			c.Logging.FilePath = env
-		} else {
-			c.Logging.FilePath = filepath.Join(".", "agent.log")
-		}
-	}
-	if c.Logging.Level == "" {
-		c.Logging.Level = "info"
-	}
 
-	if strings.TrimSpace(c.DirBrowse.SSHHostKeyPolicy) == "" {
-		c.DirBrowse.SSHHostKeyPolicy = "known_hosts"
-	}
+	// Ensure SMBProfiles map is never nil (slice/map zero-values from JSON "null")
 	if c.DirBrowse.SMBProfiles == nil {
 		c.DirBrowse.SMBProfiles = map[string]SMBProfile{}
-	}
-
-	// Kiosk defaults
-	if c.Kiosk.ListenAddr == "" {
-		c.Kiosk.ListenAddr = "127.0.0.1:0"
-	}
-	// Fullscreen defaults to true when kiosk is enabled
-	// (Go zero-value is false, so we only set it if config explicitly doesn't specify)
-
-	// Alerts defaults: enabled by default on Linux
-	if runtime.GOOS == "linux" && !c.Alerts.Enabled {
-		// Check if this is a zero-value (not explicitly set to false)
-		// We enable by default on Linux; users can set enabled: false to disable
-		c.Alerts.Enabled = true
-	}
-	if c.Alerts.ScanIntervalSec <= 0 {
-		c.Alerts.ScanIntervalSec = 300 // 5 minutes
-	}
-	if c.Alerts.MaxAlerts <= 0 {
-		c.Alerts.MaxAlerts = 50
-	}
-	if c.Alerts.LookbackHours <= 0 {
-		c.Alerts.LookbackHours = 24
-	}
-
-	// Variant defaults: prefer headless if not specified
-	if c.Variant.Desired == "" {
-		c.Variant.Desired = VariantHeadless
 	}
 }
 
@@ -356,6 +348,14 @@ func (c *Config) applyEnvOverrides() {
 		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
 			c.Transport.SkipTLSVerify = b
 		}
+	}
+	if v := os.Getenv("AGENT_DOCKER_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			c.Docker.Enabled = b
+		}
+	}
+	if v := os.Getenv("AGENT_DOCKER_SOCKET"); v != "" {
+		c.Docker.SocketPath = strings.TrimSpace(v)
 	}
 }
 
