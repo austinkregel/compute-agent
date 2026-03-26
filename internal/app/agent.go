@@ -151,6 +151,14 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		SwarmNetworkRemove: agent.handleSwarmNetworkRemove,
 		SwarmStackList:     agent.handleSwarmStackList,
 		SwarmStackRemove:   agent.handleSwarmStackRemove,
+
+		ComposeScan:        agent.handleComposeScan,
+		ComposeParse:       agent.handleComposeParse,
+		StackDeploy:        agent.handleStackDeploy,
+		StackStop:          agent.handleStackStop,
+		StackStatus:        agent.handleStackStatus,
+		ContainerLogs:      agent.handleContainerLogs,
+		ContainerInventory: agent.handleContainerInventory,
 	}
 
 	t, err := transport.New(transport.Config{
@@ -237,6 +245,11 @@ func (a *Agent) Run(ctx context.Context) error {
 				errCh <- err
 			}
 		}()
+	}
+
+	if a.cfg.Docker.Enabled {
+		go a.runDockerEventWatcher()
+		go a.runContainerMetricsEmitter()
 	}
 
 	select {

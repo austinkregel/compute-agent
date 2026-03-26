@@ -1,5 +1,7 @@
 package transport
 
+import "encoding/json"
+
 // SwarmInfoRequest requests Docker/Swarm status from the agent.
 type SwarmInfoRequest struct {
 	ClientID string `json:"clientId"`
@@ -98,4 +100,48 @@ type SwarmStackRemoveRequest struct {
 // SwarmNodeListRequest asks for a list of swarm nodes.
 type SwarmNodeListRequest struct {
 	ClientID string `json:"clientId"`
+}
+
+// ComposeScanRequest asks agent to scan a directory for compose files.
+type ComposeScanRequest struct {
+	ClientID  string `json:"clientId"`
+	Token     string `json:"token,omitempty"`
+	Directory string `json:"directory"`
+}
+
+// ComposeParseRequest asks agent to parse a specific compose file.
+type ComposeParseRequest struct {
+	ClientID string `json:"clientId"`
+	Token    string `json:"token,omitempty"`
+	File     string `json:"file"`
+}
+
+type StackDeployRequest struct {
+	ClientID string          `json:"clientId"`
+	Token    string          `json:"token,omitempty"`
+	Spec     json.RawMessage `json:"spec"`
+}
+
+type StackStopRequest struct {
+	ClientID  string `json:"clientId"`
+	Token     string `json:"token,omitempty"`
+	StackName string `json:"stackName"`
+}
+
+type StackStatusRequest struct {
+	ClientID  string `json:"clientId"`
+	Token     string `json:"token,omitempty"`
+	StackName string `json:"stackName"`
+}
+
+type ContainerLogsRequest struct {
+	ClientID    string `json:"clientId"`
+	Token       string `json:"token,omitempty"`
+	ContainerID string `json:"containerId"`
+	Tail        string `json:"tail,omitempty"`
+}
+
+type ContainerInventoryRequest struct {
+	ClientID string `json:"clientId"`
+	Token    string `json:"token,omitempty"`
 }

@@ -39,8 +39,9 @@ type Config struct {
 
 // DockerConfig controls Docker integration and Swarm management.
 type DockerConfig struct {
-	Enabled    bool   `json:"enabled"`
-	SocketPath string `json:"socketPath,omitempty"`
+	Enabled            bool     `json:"enabled"`
+	SocketPath         string   `json:"socketPath,omitempty"`
+	ComposeAllowedRoots []string `json:"composeAllowedRoots,omitempty"`
 }
 
 // KioskConfig controls the optional kiosk mode (fullscreen WebView display).
