@@ -34,17 +34,6 @@ func (a *Agent) requireDocker(errEvent, clientID string) *docker.Client {
 	return dc
 }
 
-// requireDockerManager returns the Docker client if it's both available and a
-// swarm manager. Returns nil (with error emitted) otherwise.
-func (a *Agent) requireDockerManager(errEvent, clientID string) *docker.Client {
-	dc := a.requireDocker(errEvent, clientID)
-	if dc != nil && !dc.IsManager() {
-		a.emitDockerError(errEvent, clientID, errNotManager)
-		return nil
-	}
-	return dc
-}
-
 func (a *Agent) handleSwarmInfo(msg transport.SwarmInfoRequest) {
 	dc := a.dockerClient()
 	if dc == nil {
@@ -118,29 +107,6 @@ func (a *Agent) handleSwarmLeave(msg transport.SwarmLeaveRequest) {
 	})
 }
 
-func (a *Agent) handleSwarmNodeUpdate(msg transport.SwarmNodeUpdateRequest) {
-	dc := a.dockerClient()
-	if dc == nil {
-		a.emitDockerError("swarm_node_update_result", msg.ClientID, errDockerUnavailable)
-		return
-	}
-	if !dc.IsManager() {
-		a.emitDockerError("swarm_node_update_result", msg.ClientID, errNotManager)
-		return
-	}
-	ctx, cancel := context.WithTimeout(a.ctxOrBackground(), 15*time.Second)
-	defer cancel()
-	err := dc.NodeUpdate(ctx, msg.NodeID, msg.Role, msg.Availability)
-	if err != nil {
-		a.emitDockerError("swarm_node_update_result", msg.ClientID, err)
-		return
-	}
-	a.transport.Emit("swarm_node_update_result", map[string]any{
-		"clientId": msg.ClientID,
-		"success":  true,
-	})
-}
-
 func (a *Agent) handleSwarmNodeList(msg transport.SwarmNodeListRequest) {
 	dc := a.dockerClient()
 	if dc == nil {
@@ -187,29 +153,6 @@ func (a *Agent) handleSwarmServiceList(msg transport.SwarmServiceListRequest) {
 	})
 }
 
-func (a *Agent) handleSwarmServiceRemove(msg transport.SwarmServiceRemoveRequest) {
-	dc := a.dockerClient()
-	if dc == nil {
-		a.emitDockerError("swarm_service_remove_result", msg.ClientID, errDockerUnavailable)
-		return
-	}
-	if !dc.IsManager() {
-		a.emitDockerError("swarm_service_remove_result", msg.ClientID, errNotManager)
-		return
-	}
-	ctx, cancel := context.WithTimeout(a.ctxOrBackground(), 15*time.Second)
-	defer cancel()
-	err := dc.ServiceRemove(ctx, msg.ServiceID)
-	if err != nil {
-		a.emitDockerError("swarm_service_remove_result", msg.ClientID, err)
-		return
-	}
-	a.transport.Emit("swarm_service_remove_result", map[string]any{
-		"clientId": msg.ClientID,
-		"success":  true,
-	})
-}
-
 func (a *Agent) handleSwarmServiceLogs(msg transport.SwarmServiceLogsRequest) {
 	dc := a.dockerClient()
 	if dc == nil {
@@ -253,49 +196,6 @@ func (a *Agent) handleSwarmNetworkList(msg transport.SwarmNetworkListRequest) {
 	})
 }
 
-func (a *Agent) handleSwarmNetworkCreate(msg transport.SwarmNetworkCreateRequest) {
-	dc := a.dockerClient()
-	if dc == nil {
-		a.emitDockerError("swarm_network_create_result", msg.ClientID, errDockerUnavailable)
-		return
-	}
-	if !dc.IsManager() {
-		a.emitDockerError("swarm_network_create_result", msg.ClientID, errNotManager)
-		return
-	}
-	ctx, cancel := context.WithTimeout(a.ctxOrBackground(), 15*time.Second)
-	defer cancel()
-	id, err := dc.NetworkCreate(ctx, msg.Name, msg.Driver, msg.Options)
-	if err != nil {
-		a.emitDockerError("swarm_network_create_result", msg.ClientID, err)
-		return
-	}
-	a.transport.Emit("swarm_network_create_result", map[string]any{
-		"clientId":  msg.ClientID,
-		"networkId": id,
-		"success":   true,
-	})
-}
-
-func (a *Agent) handleSwarmNetworkRemove(msg transport.SwarmNetworkRemoveRequest) {
-	dc := a.dockerClient()
-	if dc == nil {
-		a.emitDockerError("swarm_network_remove_result", msg.ClientID, errDockerUnavailable)
-		return
-	}
-	ctx, cancel := context.WithTimeout(a.ctxOrBackground(), 15*time.Second)
-	defer cancel()
-	err := dc.NetworkRemove(ctx, msg.NetworkID)
-	if err != nil {
-		a.emitDockerError("swarm_network_remove_result", msg.ClientID, err)
-		return
-	}
-	a.transport.Emit("swarm_network_remove_result", map[string]any{
-		"clientId": msg.ClientID,
-		"success":  true,
-	})
-}
-
 func (a *Agent) handleSwarmStackList(msg transport.SwarmStackListRequest) {
 	dc := a.dockerClient()
 	if dc == nil {
@@ -317,38 +217,6 @@ func (a *Agent) handleSwarmStackList(msg transport.SwarmStackListRequest) {
 		"clientId": msg.ClientID,
 		"stacks":   stacks,
 	})
-}
-
-func (a *Agent) handleSwarmStackRemove(msg transport.SwarmStackRemoveRequest) {
-	dc := a.dockerClient()
-	if dc == nil {
-		a.emitDockerError("swarm_stack_remove_result", msg.ClientID, errDockerUnavailable)
-		return
-	}
-	if !dc.IsManager() {
-		a.emitDockerError("swarm_stack_remove_result", msg.ClientID, errNotManager)
-		return
-	}
-	ctx, cancel := context.WithTimeout(a.ctxOrBackground(), 30*time.Second)
-	defer cancel()
-	err := dc.StackRemove(ctx, msg.StackName)
-	if err != nil {
-		a.emitDockerError("swarm_stack_remove_result", msg.ClientID, err)
-		return
-	}
-	a.transport.Emit("swarm_stack_remove_result", map[string]any{
-		"clientId": msg.ClientID,
-		"success":  true,
-	})
-}
-
-// Stub handlers for service create/update (requires full ServiceSpec parsing)
-func (a *Agent) handleSwarmServiceCreate(_ transport.SwarmServiceCreateRequest) {
-	a.log.Warn("swarm_service_create not yet implemented")
-}
-
-func (a *Agent) handleSwarmServiceUpdate(_ transport.SwarmServiceUpdateRequest) {
-	a.log.Warn("swarm_service_update not yet implemented")
 }
 
 var (
