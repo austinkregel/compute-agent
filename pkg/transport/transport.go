@@ -78,27 +78,19 @@ type Handlers struct {
 	KioskSaveLayout func(KioskSaveLayoutRequest)
 	KioskGetLayouts func(KioskGetLayoutsRequest)
 
-	// Docker/Swarm handlers
-	SwarmInfo          func(SwarmInfoRequest)
-	SwarmInit          func(SwarmInitRequest)
-	SwarmJoin          func(SwarmJoinRequest)
-	SwarmLeave         func(SwarmLeaveRequest)
-	SwarmNodeUpdate    func(SwarmNodeUpdateRequest)
-	SwarmNodeList      func(SwarmNodeListRequest)
-	SwarmServiceList   func(SwarmServiceListRequest)
-	SwarmServiceCreate func(SwarmServiceCreateRequest)
-	SwarmServiceUpdate func(SwarmServiceUpdateRequest)
-	SwarmServiceRemove func(SwarmServiceRemoveRequest)
-	SwarmServiceLogs   func(SwarmServiceLogsRequest)
-	SwarmNetworkList   func(SwarmNetworkListRequest)
-	SwarmNetworkCreate func(SwarmNetworkCreateRequest)
-	SwarmNetworkRemove func(SwarmNetworkRemoveRequest)
-	SwarmStackList     func(SwarmStackListRequest)
-	SwarmStackRemove   func(SwarmStackRemoveRequest)
+	// Docker/Swarm handlers. Read-only reporting plus cluster join/leave;
+	// stack/service/network mutation lives in a separate management tool.
+	SwarmInfo        func(SwarmInfoRequest)
+	SwarmInit        func(SwarmInitRequest)
+	SwarmJoin        func(SwarmJoinRequest)
+	SwarmLeave       func(SwarmLeaveRequest)
+	SwarmNodeList    func(SwarmNodeListRequest)
+	SwarmServiceList func(SwarmServiceListRequest)
+	SwarmServiceLogs func(SwarmServiceLogsRequest)
+	SwarmNetworkList func(SwarmNetworkListRequest)
+	SwarmStackList   func(SwarmStackListRequest)
 
 	ContainerInventory func(ContainerInventoryRequest)
-	StackDeploy        func(StackDeployRequest)
-	StackStop          func(StackStopRequest)
 	StackStatus        func(StackStatusRequest)
 	ComposeScan        func(ComposeScanRequest)
 	ComposeParse       func(ComposeParseRequest)
@@ -1005,16 +997,6 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			c.handlers.SwarmLeave(msg)
 		}
 
-	case "swarm_node_update":
-		var msg SwarmNodeUpdateRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal swarm_node_update", "error", err)
-			return
-		}
-		if c.handlers.SwarmNodeUpdate != nil {
-			c.handlers.SwarmNodeUpdate(msg)
-		}
-
 	case "swarm_node_list":
 		var msg SwarmNodeListRequest
 		if err := json.Unmarshal(payload, &msg); err != nil {
@@ -1033,36 +1015,6 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 		}
 		if c.handlers.SwarmServiceList != nil {
 			c.handlers.SwarmServiceList(msg)
-		}
-
-	case "swarm_service_create":
-		var msg SwarmServiceCreateRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal swarm_service_create", "error", err)
-			return
-		}
-		if c.handlers.SwarmServiceCreate != nil {
-			c.handlers.SwarmServiceCreate(msg)
-		}
-
-	case "swarm_service_update":
-		var msg SwarmServiceUpdateRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal swarm_service_update", "error", err)
-			return
-		}
-		if c.handlers.SwarmServiceUpdate != nil {
-			c.handlers.SwarmServiceUpdate(msg)
-		}
-
-	case "swarm_service_remove":
-		var msg SwarmServiceRemoveRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal swarm_service_remove", "error", err)
-			return
-		}
-		if c.handlers.SwarmServiceRemove != nil {
-			c.handlers.SwarmServiceRemove(msg)
 		}
 
 	case "swarm_service_logs":
@@ -1085,26 +1037,6 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			c.handlers.SwarmNetworkList(msg)
 		}
 
-	case "swarm_network_create":
-		var msg SwarmNetworkCreateRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal swarm_network_create", "error", err)
-			return
-		}
-		if c.handlers.SwarmNetworkCreate != nil {
-			c.handlers.SwarmNetworkCreate(msg)
-		}
-
-	case "swarm_network_remove":
-		var msg SwarmNetworkRemoveRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal swarm_network_remove", "error", err)
-			return
-		}
-		if c.handlers.SwarmNetworkRemove != nil {
-			c.handlers.SwarmNetworkRemove(msg)
-		}
-
 	case "swarm_stack_list":
 		var msg SwarmStackListRequest
 		if err := json.Unmarshal(payload, &msg); err != nil {
@@ -1115,16 +1047,6 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			c.handlers.SwarmStackList(msg)
 		}
 
-	case "swarm_stack_remove":
-		var msg SwarmStackRemoveRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal swarm_stack_remove", "error", err)
-			return
-		}
-		if c.handlers.SwarmStackRemove != nil {
-			c.handlers.SwarmStackRemove(msg)
-		}
-
 	case "container_inventory":
 		var msg ContainerInventoryRequest
 		if err := json.Unmarshal(payload, &msg); err != nil {
@@ -1133,26 +1055,6 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 		}
 		if c.handlers.ContainerInventory != nil {
 			c.handlers.ContainerInventory(msg)
-		}
-
-	case "stack_deploy":
-		var msg StackDeployRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal stack_deploy", "error", err)
-			return
-		}
-		if c.handlers.StackDeploy != nil {
-			c.handlers.StackDeploy(msg)
-		}
-
-	case "stack_stop":
-		var msg StackStopRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal stack_stop", "error", err)
-			return
-		}
-		if c.handlers.StackStop != nil {
-			c.handlers.StackStop(msg)
 		}
 
 	case "stack_status":
