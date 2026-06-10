@@ -11,9 +11,12 @@ import (
 )
 
 func (a *Agent) handleContainerInventory(req transport.ContainerInventoryRequest) {
-	dc := a.getDockerClient()
+	dc := a.dockerClient()
 	if dc == nil {
-		a.emitDockerError("container_inventory_response", req.ClientID, errDockerUnavailable)
+		_ = a.transport.Emit("container_inventory_response", map[string]any{
+			"clientId": req.ClientID, "token": req.Token,
+			"error": errDockerUnavailable.Error(), "containers": []any{},
+		})
 		return
 	}
 	ctx, cancel := context.WithTimeout(a.ctxOrBackground(), 15*time.Second)
@@ -21,19 +24,26 @@ func (a *Agent) handleContainerInventory(req transport.ContainerInventoryRequest
 
 	inv, err := dc.ListAllContainers(ctx)
 	if err != nil {
-		a.emitDockerError("container_inventory_response", req.ClientID, err)
+		_ = a.transport.Emit("container_inventory_response", map[string]any{
+			"clientId": req.ClientID, "token": req.Token,
+			"error": err.Error(), "containers": []any{},
+		})
 		return
 	}
 	_ = a.transport.Emit("container_inventory_response", map[string]any{
-		"clientId": req.ClientID,
-		"data":     inv,
+		"clientId":   req.ClientID,
+		"token":      req.Token,
+		"containers": inv.Containers,
+		"total":      inv.Total,
+		"managed":    inv.Managed,
+		"swarm":      inv.Swarm,
+		"unmanaged":  inv.Unmanaged,
 	})
 }
 
 func (a *Agent) handleStackDeploy(req transport.StackDeployRequest) {
-	dc := a.getDockerClient()
+	dc := a.requireDocker("stack_deploy_result", req.ClientID)
 	if dc == nil {
-		a.emitDockerError("stack_deploy_result", req.ClientID, errDockerUnavailable)
 		return
 	}
 
@@ -63,9 +73,8 @@ func (a *Agent) handleStackDeploy(req transport.StackDeployRequest) {
 }
 
 func (a *Agent) handleStackStop(req transport.StackStopRequest) {
-	dc := a.getDockerClient()
+	dc := a.requireDocker("stack_stop_result", req.ClientID)
 	if dc == nil {
-		a.emitDockerError("stack_stop_result", req.ClientID, errDockerUnavailable)
 		return
 	}
 
@@ -93,9 +102,8 @@ func (a *Agent) handleStackStop(req transport.StackStopRequest) {
 }
 
 func (a *Agent) handleStackStatus(req transport.StackStatusRequest) {
-	dc := a.getDockerClient()
+	dc := a.requireDocker("stack_status_response", req.ClientID)
 	if dc == nil {
-		a.emitDockerError("stack_status_response", req.ClientID, errDockerUnavailable)
 		return
 	}
 
@@ -114,15 +122,8 @@ func (a *Agent) handleStackStatus(req transport.StackStatusRequest) {
 	})
 }
 
-func (a *Agent) getDockerClient() *docker.Client {
-	if a.telemetry == nil {
-		return nil
-	}
-	return a.telemetry.DockerClient()
-}
-
 func (a *Agent) runDockerEventWatcher() {
-	dc := a.getDockerClient()
+	dc := a.dockerClient()
 	if dc == nil || dc.Raw() == nil {
 		return
 	}
