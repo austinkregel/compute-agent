@@ -152,13 +152,13 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		SwarmStackList:     agent.handleSwarmStackList,
 		SwarmStackRemove:   agent.handleSwarmStackRemove,
 
-		ComposeScan:        agent.handleComposeScan,
-		ComposeParse:       agent.handleComposeParse,
+		ContainerInventory: agent.handleContainerInventory,
 		StackDeploy:        agent.handleStackDeploy,
 		StackStop:          agent.handleStackStop,
 		StackStatus:        agent.handleStackStatus,
+		ComposeScan:        agent.handleComposeScan,
+		ComposeParse:       agent.handleComposeParse,
 		ContainerLogs:      agent.handleContainerLogs,
-		ContainerInventory: agent.handleContainerInventory,
 	}
 
 	t, err := transport.New(transport.Config{
@@ -237,6 +237,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	go func() { errCh <- a.transport.Run(ctx) }()
 	go func() { errCh <- a.telemetry.Run(ctx) }()
 
+	go a.runDockerEventWatcher()
+	go a.runContainerMetricsEmitter()
+
 	// Start kiosk subsystem if enabled
 	if a.kiosk != nil {
 		go func() {
@@ -245,11 +248,6 @@ func (a *Agent) Run(ctx context.Context) error {
 				errCh <- err
 			}
 		}()
-	}
-
-	if a.cfg.Docker.Enabled {
-		go a.runDockerEventWatcher()
-		go a.runContainerMetricsEmitter()
 	}
 
 	select {
