@@ -5,14 +5,13 @@ import (
 	"io"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
 	"github.com/austinkregel/compute-agent/pkg/transport"
+	"github.com/docker/docker/api/types/container"
 )
 
 func (a *Agent) handleContainerLogs(req transport.ContainerLogsRequest) {
-	dc := a.getDockerClient()
-	if dc == nil || dc.Raw() == nil {
-		a.emitDockerError("container_logs_response", req.ClientID, errDockerUnavailable)
+	dc := a.requireDocker("container_logs_response", req.ClientID)
+	if dc == nil {
 		return
 	}
 
@@ -41,6 +40,7 @@ func (a *Agent) handleContainerLogs(req transport.ContainerLogsRequest) {
 	_ = a.transport.Emit("container_logs_response", map[string]any{
 		"clientId":    req.ClientID,
 		"containerId": req.ContainerID,
+		"token":       req.Token,
 		"logs":        stripDockerLogHeaders(data),
 	})
 }
@@ -51,7 +51,6 @@ func (a *Agent) handleContainerLogs(req transport.ContainerLogsRequest) {
 func stripDockerLogHeaders(data []byte) string {
 	var result []byte
 	for len(data) >= 8 {
-		// Read payload size from bytes 4-7 (big-endian uint32)
 		size := uint32(data[4])<<24 | uint32(data[5])<<16 | uint32(data[6])<<8 | uint32(data[7])
 		data = data[8:]
 		if uint32(len(data)) < size {
