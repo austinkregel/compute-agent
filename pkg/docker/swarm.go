@@ -80,24 +80,3 @@ func (c *Client) NodeList(ctx context.Context) ([]NodeSummary, error) {
 	}
 	return out, nil
 }
-
-// NodeUpdate changes a node's role or availability (manager-only).
-func (c *Client) NodeUpdate(ctx context.Context, nodeID string, role string, availability string) error {
-	if c == nil || c.cli == nil {
-		return fmt.Errorf("docker not available")
-	}
-	node, _, err := c.cli.NodeInspectWithRaw(ctx, nodeID)
-	if err != nil {
-		return fmt.Errorf("node inspect: %w", err)
-	}
-
-	spec := node.Spec
-	if role != "" {
-		spec.Role = swarm.NodeRole(role)
-	}
-	if availability != "" {
-		spec.Availability = swarm.NodeAvailability(availability)
-	}
-
-	return c.cli.NodeUpdate(ctx, nodeID, node.Version, spec)
-}
