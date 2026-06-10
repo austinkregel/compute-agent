@@ -396,10 +396,6 @@ func (p *Publisher) emitSample() {
 		}
 	}
 
-	if gpus := DetectGPUs(); len(gpus) > 0 {
-		sample.GPUs = gpus
-	}
-
 	// Docker/Swarm status
 	if p.dockerClient != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -574,7 +570,6 @@ type StatsSample struct {
 	TimeSyncStatus      string                   `json:"timeSyncStatus,omitempty"`
 	Alerts              *sysalerts.AlertSnapshot `json:"alerts,omitempty"`
 	Docker              *docker.DockerStatus     `json:"docker,omitempty"`
-	GPUs                []GPUDevice              `json:"gpus,omitempty"`
 	Timestamp           string                   `json:"ts"`
 }
 
