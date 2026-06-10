@@ -22,7 +22,7 @@ func (a *Agent) runContainerMetricsEmitter() {
 }
 
 func (a *Agent) emitContainerMetrics() {
-	dc := a.getDockerClient()
+	dc := a.dockerClient()
 	if dc == nil || dc.Raw() == nil {
 		return
 	}
