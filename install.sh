@@ -1,0 +1,342 @@
+#!/bin/bash
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Default values
+AGENT_DIR="/opt/agent"
+BINARY_NAME="backup-agent"
+SUPERVISOR_CONF_DIR="/etc/supervisor/conf.d"
+SUPERVISOR_CONF_FILE="${SUPERVISOR_CONF_DIR}/backup-agent.conf"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Function to print colored messages
+info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Check if running as root
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        error "This script must be run as root (use sudo)"
+        exit 1
+    fi
+}
+
+# Check if binary exists
+check_binary() {
+    local binary_path="${SCRIPT_DIR}/dist/${BINARY_NAME}"
+    if [[ ! -f "$binary_path" ]]; then
+        # Try current directory
+        binary_path="${SCRIPT_DIR}/${BINARY_NAME}"
+        if [[ ! -f "$binary_path" ]]; then
+            error "backup-agent binary not found. Expected at:"
+            error "  - ${SCRIPT_DIR}/dist/${BINARY_NAME}"
+            error "  - ${SCRIPT_DIR}/${BINARY_NAME}"
+            error ""
+            error "Please build the agent first with: make build"
+            exit 1
+        fi
+    fi
+    echo "$binary_path"
+}
+
+# Install supervisord
+install_supervisord() {
+    if command -v supervisord &> /dev/null; then
+        info "supervisord is already installed"
+        return 0
+    fi
+
+    info "Installing supervisord..."
+
+    if command -v apt-get &> /dev/null; then
+        apt-get update
+        apt-get install -y supervisor
+    elif command -v yum &> /dev/null; then
+        yum install -y supervisor
+    elif command -v dnf &> /dev/null; then
+        dnf install -y supervisor
+    elif command -v pacman &> /dev/null; then
+        pacman -S --noconfirm supervisor
+    else
+        error "Could not detect package manager. Please install supervisord manually."
+        exit 1
+    fi
+
+    info "supervisord installed successfully"
+}
+
+# Create agent directory
+create_agent_dir() {
+    if [[ ! -d "$AGENT_DIR" ]]; then
+        info "Creating ${AGENT_DIR}..."
+        mkdir -p "$AGENT_DIR"
+    else
+        info "${AGENT_DIR} already exists"
+    fi
+}
+
+# Copy binary
+install_binary() {
+    local binary_path="$1"
+    local target="${AGENT_DIR}/${BINARY_NAME}"
+
+    info "Installing binary to ${target}..."
+    cp "$binary_path" "$target"
+    chmod +x "$target"
+    info "Binary installed successfully"
+}
+
+# Create agent-config.json
+create_config() {
+    local client_id="$1"
+    local server_url="$2"
+    local auth_token="$3"
+    local config_file="${AGENT_DIR}/agent-config.json"
+
+    # Check if config already exists
+    if [[ -f "$config_file" ]]; then
+        warn "agent-config.json already exists at ${config_file}"
+        read -p "Overwrite? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            info "Keeping existing config file"
+            return 0
+        fi
+    fi
+
+    info "Creating agent-config.json..."
+
+    # Create a minimal valid config with required fields
+    cat > "$config_file" <<EOF
+{
+  "clientId": "${client_id}",
+  "serverUrl": "${server_url}",
+  "authToken": "${auth_token}",
+  "statsIntervalSec": 60,
+  "heartbeatIntervalSec": 20,
+  "updateCheckEnabled": true,
+  "updateCheckIntervalHours": 12,
+  "pongTimeoutSec": 90,
+  "openHardwareMonitorPort": 8085,
+  "connectivity": {
+    "dnsTestHost": "1.1.1.1",
+    "tcpTestHost": "1.1.1.1",
+    "tcpTestPort": 53
+  },
+  "admin": {
+    "enableShell": true,
+    "allowedCommands": [],
+    "allowedCwds": [],
+    "maxConcurrent": 1,
+    "defaultTimeoutSec": 30,
+    "requireToken": true,
+    "commandToken": "",
+    "rateLimitMax": 0,
+    "rateLimitWindowSec": 60
+  },
+  "backup": {
+    "allowedSourceRoots": [],
+    "allowedDestRoots": []
+  },
+  "transport": {
+    "skipTlsVerify": false,
+    "path": "/socket.io"
+  },
+  "logging": {
+    "file": "/opt/agent/agent.log",
+    "level": "info"
+  },
+  "shell": {
+    "command": "/bin/bash",
+    "args": ["-l"]
+  },
+  "dirBrowse": {
+    "allowedRoots": [],
+    "sshHostKeyPolicy": "known_hosts",
+    "smbProfiles": {}
+  }
+}
+EOF
+
+    chmod 600 "$config_file"
+    info "agent-config.json created successfully"
+}
+
+# Install supervisord config
+install_supervisor_config() {
+    # Ensure supervisor conf.d directory exists
+    if [[ ! -d "$SUPERVISOR_CONF_DIR" ]]; then
+        info "Creating ${SUPERVISOR_CONF_DIR}..."
+        mkdir -p "$SUPERVISOR_CONF_DIR"
+    fi
+
+    # Check if backup-agent user exists to determine if we should set user in config
+    local user_line=""
+    if id "backup-agent" &>/dev/null; then
+        user_line="user=backup-agent"
+    else
+        user_line=";user=backup-agent"
+    fi
+
+    info "Creating supervisord configuration at ${SUPERVISOR_CONF_FILE}..."
+
+    # Generate supervisord config file
+    cat > "$SUPERVISOR_CONF_FILE" <<EOF
+; Supervisord program config for the backup-agent.
+; Generated by install.sh
+;
+; Assumptions for deployment layout:
+; - ${AGENT_DIR}/backup-agent        (the agent binary)
+; - ${AGENT_DIR}/agent-config.json   (the JSON config)
+;
+[program:backup-agent]
+; Run from ${AGENT_DIR} so the default ./agent-config.json resolution works.
+directory=${AGENT_DIR}
+
+; With directory=${AGENT_DIR}, the agent will load ./agent-config.json by default.
+command=${AGENT_DIR}/backup-agent
+
+; Recommended: run as a dedicated unprivileged user (create if needed).
+${user_line}
+
+; Start/Restart behavior
+autostart=true
+autorestart=true
+startsecs=2
+startretries=10
+
+; Clean shutdown on SIGTERM (agent listens for SIGINT/SIGTERM)
+stopsignal=TERM
+stopwaitsecs=20
+stopasgroup=true
+killasgroup=true
+
+; Log to files under ${AGENT_DIR} to avoid missing /var/log dirs.
+stdout_logfile=${AGENT_DIR}/backup-agent.stdout.log
+stderr_logfile=${AGENT_DIR}/backup-agent.stderr.log
+stdout_logfile_maxbytes=20MB
+stderr_logfile_maxbytes=20MB
+stdout_logfile_backups=10
+stderr_logfile_backups=10
+
+; Environment (optional). You can uncomment to force config selection.
+environment=CLIENT_CONFIG_PATH="${AGENT_DIR}/agent-config.json"
+EOF
+
+    chmod 644 "$SUPERVISOR_CONF_FILE"
+    info "Supervisord configuration created successfully"
+}
+
+# Update and restart supervisord
+restart_supervisord() {
+    info "Updating supervisord configuration..."
+
+    # Reload supervisord configuration
+    if command -v supervisorctl &> /dev/null; then
+        supervisorctl reread
+        supervisorctl update
+        info "Supervisord configuration updated"
+
+        # Check if backup-agent is already running
+        if supervisorctl status backup-agent &> /dev/null; then
+            info "Restarting backup-agent..."
+            supervisorctl restart backup-agent
+        else
+            info "Starting backup-agent..."
+            supervisorctl start backup-agent
+        fi
+
+        # Show status
+        sleep 1
+        supervisorctl status backup-agent
+    else
+        warn "supervisorctl not found. Please manually restart supervisord:"
+        warn "  systemctl restart supervisor"
+        warn "  # or"
+        warn "  service supervisor restart"
+    fi
+}
+
+# Set ownership (optional: create dedicated user)
+setup_ownership() {
+    # Check if backup-agent user exists
+    if id "backup-agent" &>/dev/null; then
+        info "Setting ownership to backup-agent user..."
+        chown -R backup-agent:backup-agent "$AGENT_DIR"
+    else
+        warn "backup-agent user does not exist. Running as root."
+        warn "For better security, create a dedicated user:"
+        warn "  useradd -r -s /bin/false backup-agent"
+        warn "Then re-run this script to update ownership and supervisord config."
+    fi
+}
+
+# Main installation function
+main() {
+    info "Starting backup-agent installation..."
+
+    # Check prerequisites
+    check_root
+    local binary_path=$(check_binary)
+
+    # Get configuration values
+    local client_id="${1:-}"
+    local server_url="${2:-}"
+    local auth_token="${3:-}"
+
+    if [[ -z "$client_id" ]]; then
+        read -p "Enter client ID (hostname or identifier): " client_id
+    fi
+
+    if [[ -z "$server_url" ]]; then
+        read -p "Enter server URL (e.g., https://example.com:8443/): " server_url
+    fi
+
+    if [[ -z "$auth_token" ]]; then
+        read -sp "Enter auth token: " auth_token
+        echo
+    fi
+
+    # Validate inputs
+    if [[ -z "$client_id" ]] || [[ -z "$server_url" ]] || [[ -z "$auth_token" ]]; then
+        error "All configuration values are required"
+        exit 1
+    fi
+
+    # Installation steps
+    install_supervisord
+    create_agent_dir
+    install_binary "$binary_path"
+    create_config "$client_id" "$server_url" "$auth_token"
+    setup_ownership
+    install_supervisor_config
+    restart_supervisord
+
+    info ""
+    info "Installation complete!"
+    info ""
+    info "Agent installed at: ${AGENT_DIR}"
+    info "Config file: ${AGENT_DIR}/agent-config.json"
+    info "Supervisord config: ${SUPERVISOR_CONF_FILE}"
+    info ""
+    info "To check agent status: supervisorctl status backup-agent"
+    info "To view logs: tail -f ${AGENT_DIR}/backup-agent.stdout.log"
+    info "To view errors: tail -f ${AGENT_DIR}/backup-agent.stderr.log"
+}
+
+# Run main function
+main "$@"
