@@ -1,125 +1,58 @@
-//go:build linux
-
 package telemetry
 
 import (
-	"context"
-	"strconv"
+	"os/exec"
 	"strings"
-	"time"
 )
 
-// GPUDevice describes a detected GPU.
-type GPUDevice struct {
-	Index              int     `json:"index"`
-	Name               string  `json:"name"`
-	Vendor             string  `json:"vendor"`
-	UUID               string  `json:"uuid,omitempty"`
-	MemoryMB           int64   `json:"memoryMB,omitempty"`
-	DriverVersion      string  `json:"driverVersion,omitempty"`
-	ComputeCapability  string  `json:"computeCapability,omitempty"`
-	Temperature        float64 `json:"temperature,omitempty"`
-	UtilizationPercent float64 `json:"utilizationPercent,omitempty"`
-	MemoryUsedMB       int64   `json:"memoryUsedMB,omitempty"`
-	MemoryFreeMB       int64   `json:"memoryFreeMB,omitempty"`
+// GPUCapability describes a detected GPU.
+type GPUCapability struct {
+	Vendor string `json:"vendor"`
+	Model  string `json:"model"`
+	VRAM   string `json:"vram,omitempty"`
 }
 
-// DetectGPUs probes for NVIDIA and AMD GPUs via vendor CLI tools.
-func DetectGPUs() []GPUDevice {
-	var gpus []GPUDevice
-	gpus = append(gpus, detectNVIDIA()...)
-	gpus = append(gpus, detectAMD()...)
-	return gpus
+// DetectGPUs probes for NVIDIA and AMD GPUs using CLI tools.
+func DetectGPUs() []GPUCapability {
+	var caps []GPUCapability
+	caps = append(caps, detectNvidia()...)
+	caps = append(caps, detectAMD()...)
+	return caps
 }
 
-func detectNVIDIA() []GPUDevice {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	query := "index,name,uuid,memory.total,driver_version,compute_cap,temperature.gpu,utilization.gpu,memory.used,memory.free"
-	stdout, _, _, err := runCmd(ctx,
-		"nvidia-smi",
-		"--query-gpu="+query,
-		"--format=csv,noheader,nounits",
-	)
+func detectNvidia() []GPUCapability {
+	out, err := exec.Command("nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits").Output()
 	if err != nil {
 		return nil
 	}
-
-	var gpus []GPUDevice
-	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	var caps []GPUCapability
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, ", ", 2)
+		if len(parts) < 1 || parts[0] == "" {
 			continue
 		}
-		fields := strings.Split(line, ", ")
-		if len(fields) < 10 {
-			continue
+		cap := GPUCapability{Vendor: "nvidia", Model: strings.TrimSpace(parts[0])}
+		if len(parts) > 1 {
+			cap.VRAM = strings.TrimSpace(parts[1]) + " MiB"
 		}
-
-		idx, _ := strconv.Atoi(strings.TrimSpace(fields[0]))
-		memTotal, _ := strconv.ParseInt(strings.TrimSpace(fields[3]), 10, 64)
-		temp, _ := strconv.ParseFloat(strings.TrimSpace(fields[6]), 64)
-		util, _ := strconv.ParseFloat(strings.TrimSpace(fields[7]), 64)
-		memUsed, _ := strconv.ParseInt(strings.TrimSpace(fields[8]), 10, 64)
-		memFree, _ := strconv.ParseInt(strings.TrimSpace(fields[9]), 10, 64)
-
-		gpus = append(gpus, GPUDevice{
-			Index:              idx,
-			Name:               strings.TrimSpace(fields[1]),
-			Vendor:             "NVIDIA",
-			UUID:               strings.TrimSpace(fields[2]),
-			MemoryMB:           memTotal,
-			DriverVersion:      strings.TrimSpace(fields[4]),
-			ComputeCapability:  strings.TrimSpace(fields[5]),
-			Temperature:        temp,
-			UtilizationPercent: util,
-			MemoryUsedMB:       memUsed,
-			MemoryFreeMB:       memFree,
-		})
+		caps = append(caps, cap)
 	}
-	return gpus
+	return caps
 }
 
-func detectAMD() []GPUDevice {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	stdout, _, _, err := runCmd(ctx, "rocm-smi", "--showid", "--showtemp", "--showuse", "--showmeminfo", "vram", "--csv")
+func detectAMD() []GPUCapability {
+	out, err := exec.Command("rocm-smi", "--showproductname", "--csv").Output()
 	if err != nil {
 		return nil
 	}
-
-	lines := strings.Split(strings.TrimSpace(stdout), "\n")
-	if len(lines) < 2 {
-		return nil
-	}
-
-	var gpus []GPUDevice
-	for i, line := range lines[1:] {
-		fields := strings.Split(line, ",")
-		if len(fields) < 2 {
+	var caps []GPUCapability
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for _, line := range lines[1:] {
+		fields := strings.SplitN(line, ",", 2)
+		if len(fields) < 2 || fields[1] == "" {
 			continue
 		}
-
-		gpu := GPUDevice{
-			Index:  i,
-			Vendor: "AMD",
-			Name:   strings.TrimSpace(fields[0]),
-		}
-
-		for _, f := range fields[1:] {
-			f = strings.TrimSpace(f)
-			if v, err := strconv.ParseFloat(f, 64); err == nil {
-				if gpu.Temperature == 0 {
-					gpu.Temperature = v
-				} else if gpu.UtilizationPercent == 0 {
-					gpu.UtilizationPercent = v
-				}
-			}
-		}
-
-		gpus = append(gpus, gpu)
+		caps = append(caps, GPUCapability{Vendor: "amd", Model: strings.TrimSpace(fields[1])})
 	}
-	return gpus
+	return caps
 }
