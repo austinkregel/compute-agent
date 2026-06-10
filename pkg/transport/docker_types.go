@@ -102,46 +102,51 @@ type SwarmNodeListRequest struct {
 	ClientID string `json:"clientId"`
 }
 
-// ComposeScanRequest asks agent to scan a directory for compose files.
-type ComposeScanRequest struct {
-	ClientID  string `json:"clientId"`
-	Token     string `json:"token,omitempty"`
-	Directory string `json:"directory"`
-}
-
-// ComposeParseRequest asks agent to parse a specific compose file.
-type ComposeParseRequest struct {
+// ContainerInventoryRequest asks the agent to list all containers.
+type ContainerInventoryRequest struct {
 	ClientID string `json:"clientId"`
-	Token    string `json:"token,omitempty"`
-	File     string `json:"file"`
+	Token    string `json:"token"`
 }
 
+// StackDeployRequest asks the agent to deploy a stack.
 type StackDeployRequest struct {
 	ClientID string          `json:"clientId"`
-	Token    string          `json:"token,omitempty"`
+	Token    string          `json:"token"`
 	Spec     json.RawMessage `json:"spec"`
 }
 
+// StackStopRequest asks the agent to stop a stack.
 type StackStopRequest struct {
 	ClientID  string `json:"clientId"`
-	Token     string `json:"token,omitempty"`
+	Token     string `json:"token"`
 	StackName string `json:"stackName"`
 }
 
+// StackStatusRequest asks the agent for the status of a stack.
 type StackStatusRequest struct {
 	ClientID  string `json:"clientId"`
-	Token     string `json:"token,omitempty"`
+	Token     string `json:"token"`
 	StackName string `json:"stackName"`
 }
 
-type ContainerLogsRequest struct {
-	ClientID    string `json:"clientId"`
-	Token       string `json:"token,omitempty"`
-	ContainerID string `json:"containerId"`
-	Tail        string `json:"tail,omitempty"`
+// ComposeScanRequest asks the agent to scan a directory for compose files.
+type ComposeScanRequest struct {
+	ClientID  string `json:"clientId"`
+	Token     string `json:"token"`
+	Directory string `json:"directory"`
 }
 
-type ContainerInventoryRequest struct {
-	ClientID string `json:"clientId"`
-	Token    string `json:"token,omitempty"`
+// ComposeParseRequest asks the agent to parse specific compose files.
+type ComposeParseRequest struct {
+	ClientID string          `json:"clientId"`
+	Token    string          `json:"token"`
+	Files    json.RawMessage `json:"files"`
+}
+
+// ContainerLogsRequest asks the agent for container logs.
+type ContainerLogsRequest struct {
+	ClientID    string `json:"clientId"`
+	Token       string `json:"token"`
+	ContainerID string `json:"containerId"`
+	Tail        string `json:"tail,omitempty"`
 }
