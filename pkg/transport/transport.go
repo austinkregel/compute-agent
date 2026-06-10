@@ -96,13 +96,13 @@ type Handlers struct {
 	SwarmStackList     func(SwarmStackListRequest)
 	SwarmStackRemove   func(SwarmStackRemoveRequest)
 
-	ComposeScan        func(ComposeScanRequest)
-	ComposeParse       func(ComposeParseRequest)
+	ContainerInventory func(ContainerInventoryRequest)
 	StackDeploy        func(StackDeployRequest)
 	StackStop          func(StackStopRequest)
 	StackStatus        func(StackStatusRequest)
+	ComposeScan        func(ComposeScanRequest)
+	ComposeParse       func(ComposeParseRequest)
 	ContainerLogs      func(ContainerLogsRequest)
-	ContainerInventory func(ContainerInventoryRequest)
 }
 
 // AdminCommand mirrors the payload emitted by the control plane.
@@ -1125,24 +1125,14 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			c.handlers.SwarmStackRemove(msg)
 		}
 
-	case "compose_scan":
-		var msg ComposeScanRequest
+	case "container_inventory":
+		var msg ContainerInventoryRequest
 		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal compose_scan", "error", err)
+			c.log.Error("unmarshal container_inventory", "error", err)
 			return
 		}
-		if c.handlers.ComposeScan != nil {
-			c.handlers.ComposeScan(msg)
-		}
-
-	case "compose_parse":
-		var msg ComposeParseRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal compose_parse", "error", err)
-			return
-		}
-		if c.handlers.ComposeParse != nil {
-			c.handlers.ComposeParse(msg)
+		if c.handlers.ContainerInventory != nil {
+			c.handlers.ContainerInventory(msg)
 		}
 
 	case "stack_deploy":
@@ -1175,6 +1165,26 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			c.handlers.StackStatus(msg)
 		}
 
+	case "compose_scan":
+		var msg ComposeScanRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal compose_scan", "error", err)
+			return
+		}
+		if c.handlers.ComposeScan != nil {
+			c.handlers.ComposeScan(msg)
+		}
+
+	case "compose_parse":
+		var msg ComposeParseRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal compose_parse", "error", err)
+			return
+		}
+		if c.handlers.ComposeParse != nil {
+			c.handlers.ComposeParse(msg)
+		}
+
 	case "container_logs":
 		var msg ContainerLogsRequest
 		if err := json.Unmarshal(payload, &msg); err != nil {
@@ -1183,16 +1193,6 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 		}
 		if c.handlers.ContainerLogs != nil {
 			c.handlers.ContainerLogs(msg)
-		}
-
-	case "container_inventory":
-		var msg ContainerInventoryRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal container_inventory", "error", err)
-			return
-		}
-		if c.handlers.ContainerInventory != nil {
-			c.handlers.ContainerInventory(msg)
 		}
 
 	default:
