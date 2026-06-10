@@ -24,6 +24,27 @@ func (a *Agent) emitDockerError(event string, clientID string, err error) {
 	})
 }
 
+// requireDocker returns the Docker client, emitting an error event if unavailable.
+// Returns nil when Docker is not available; callers should return early.
+func (a *Agent) requireDocker(errEvent, clientID string) *docker.Client {
+	dc := a.dockerClient()
+	if dc == nil {
+		a.emitDockerError(errEvent, clientID, errDockerUnavailable)
+	}
+	return dc
+}
+
+// requireDockerManager returns the Docker client if it's both available and a
+// swarm manager. Returns nil (with error emitted) otherwise.
+func (a *Agent) requireDockerManager(errEvent, clientID string) *docker.Client {
+	dc := a.requireDocker(errEvent, clientID)
+	if dc != nil && !dc.IsManager() {
+		a.emitDockerError(errEvent, clientID, errNotManager)
+		return nil
+	}
+	return dc
+}
+
 func (a *Agent) handleSwarmInfo(msg transport.SwarmInfoRequest) {
 	dc := a.dockerClient()
 	if dc == nil {
