@@ -386,6 +386,47 @@ func DeleteFile(path string, force, recursive bool) error {
 	return os.Remove(absPath)
 }
 
+// --- Read operation ---
+
+// ErrIsDirectory is returned when a read targets a directory.
+var ErrIsDirectory = errors.New("path is a directory")
+
+// ErrFileTooLarge is returned when a file exceeds the read size limit.
+var ErrFileTooLarge = errors.New("file exceeds the maximum read size")
+
+// OpenForRead validates a path and opens it for reading. Reads are
+// non-mutating, so "dangerous" prefixes (e.g. /usr, /etc) are permitted —
+// viewing system config in the editor is legitimate — but hard-deny prefixes
+// (/dev, /proc, /sys, /run) stay blocked to avoid pseudo-files. The cleaned
+// absolute path and file size are returned; the caller owns closing the file.
+func OpenForRead(path string, maxBytes int64) (*os.File, int64, error) {
+	absPath, err := ValidatePath(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	// force=true allows dangerous prefixes while still blocking hard-deny ones.
+	if err := CheckPathPolicy(absPath, true); err != nil {
+		return nil, 0, err
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, 0, err
+	}
+	if info.IsDir() {
+		return nil, 0, ErrIsDirectory
+	}
+	if maxBytes > 0 && info.Size() > maxBytes {
+		return nil, 0, fmt.Errorf("%w: %d bytes > %d-byte limit", ErrFileTooLarge, info.Size(), maxBytes)
+	}
+
+	f, err := os.Open(absPath)
+	if err != nil {
+		return nil, 0, err
+	}
+	return f, info.Size(), nil
+}
+
 // --- Chmod operation ---
 
 // ChmodFile changes the permissions of a file.

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -128,6 +129,7 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		SwitchVariant:   agent.handleSwitchVariant,
 		CheckUpdates:    agent.handleCheckUpdates,
 		DirList:         agent.handleDirListRequest,
+		FileGet:         agent.handleFileGetRequest,
 		FilePutStart:    agent.handleFilePutStart,
 		FilePutChunk:    agent.handleFilePutChunk,
 		FilePutFinish:   agent.handleFilePutFinish,
@@ -700,6 +702,79 @@ func toTransportDirEntries(in []dirbrowse.Entry) []transport.DirListEntry {
 }
 
 // --- File operation handlers ---
+
+// Read streaming tunables. The chunk size stays well under the 1 MB frame
+// limit; the size cap keeps a stray read of a huge file from flooding the
+// relay (the IDE can raise it per-request via maxSize).
+const (
+	fileGetChunkBytes int64 = 256 * 1024
+	fileGetMaxBytes   int64 = 32 * 1024 * 1024
+)
+
+// handleFileGetRequest reads a file and streams it back as file_get_chunk
+// frames followed by a terminal file_get_result. This is the read half of the
+// file API over the control-plane relay (previously only the direct P2P
+// listener supported it — see docs/PROTOCOL.md "PROTOCOL GAP").
+func (a *Agent) handleFileGetRequest(msg transport.FileGetRequest) {
+	result := transport.FileGetResult{
+		ClientID:  a.cfg.ClientID,
+		RequestID: msg.RequestID,
+		Path:      msg.Path,
+	}
+	fail := func(reason string) {
+		result.OK = false
+		result.Error = reason
+		a.log.Warn("file_get_request failed", "requestId", msg.RequestID, "path", msg.Path, "error", reason)
+		if err := a.transport.Emit("file_get_result", result); err != nil {
+			a.log.Error("failed to emit file_get_result", "requestId", msg.RequestID, "error", err)
+		}
+	}
+
+	limit := fileGetMaxBytes
+	if msg.MaxSize > 0 && msg.MaxSize < limit {
+		limit = msg.MaxSize
+	}
+
+	f, size, err := fileops.OpenForRead(msg.Path, limit)
+	if err != nil {
+		fail(err.Error())
+		return
+	}
+	defer f.Close()
+
+	buf := make([]byte, fileGetChunkBytes)
+	var offset int64
+	for {
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			if emitErr := a.transport.Emit("file_get_chunk", map[string]any{
+				"clientId":  a.cfg.ClientID,
+				"requestId": msg.RequestID,
+				"offset":    offset,
+				"data":      base64.StdEncoding.EncodeToString(buf[:n]),
+			}); emitErr != nil {
+				fail("connection lost mid-read: " + emitErr.Error())
+				return
+			}
+			offset += int64(n)
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			fail(readErr.Error())
+			return
+		}
+	}
+
+	result.OK = true
+	result.Size = offset
+	_ = size // os.Stat size; offset is the authoritative bytes-sent count
+	a.log.Info("file_get_request completed", "requestId", msg.RequestID, "path", msg.Path, "size", offset)
+	if err := a.transport.Emit("file_get_result", result); err != nil {
+		a.log.Error("failed to emit file_get_result", "requestId", msg.RequestID, "error", err)
+	}
+}
 
 func (a *Agent) handleFilePutStart(msg transport.FilePutStartRequest) {
 	clientID := a.cfg.ClientID

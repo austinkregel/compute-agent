@@ -1,6 +1,8 @@
 package fileops
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -229,6 +231,82 @@ func TestDeleteFile_RegularFile(t *testing.T) {
 	// Verify file was deleted
 	if _, err := os.Stat(testFile); !os.IsNotExist(err) {
 		t.Error("File was not deleted")
+	}
+}
+
+func TestOpenForRead_RegularFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "read.txt")
+	content := []byte("hello from disk")
+	if err := os.WriteFile(testFile, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	f, size, err := OpenForRead(testFile, 0)
+	if err != nil {
+		t.Fatalf("OpenForRead = %v, want nil", err)
+	}
+	defer f.Close()
+	if size != int64(len(content)) {
+		t.Errorf("size = %d, want %d", size, len(content))
+	}
+	got, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("content = %q, want %q", got, content)
+	}
+}
+
+func TestOpenForRead_RejectsDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	_, _, err := OpenForRead(tmpDir, 0)
+	if err != ErrIsDirectory {
+		t.Errorf("OpenForRead(dir) = %v, want %v", err, ErrIsDirectory)
+	}
+}
+
+func TestOpenForRead_EnforcesSizeLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "big.txt")
+	if err := os.WriteFile(testFile, []byte("0123456789"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := OpenForRead(testFile, 4)
+	if !errors.Is(err, ErrFileTooLarge) {
+		t.Errorf("OpenForRead with small limit = %v, want ErrFileTooLarge", err)
+	}
+}
+
+func TestOpenForRead_RejectsTraversal(t *testing.T) {
+	_, _, err := OpenForRead("/tmp/../etc/passwd", 0)
+	if err != ErrPathTraversal {
+		t.Errorf("OpenForRead(traversal) = %v, want %v", err, ErrPathTraversal)
+	}
+}
+
+func TestOpenForRead_BlocksHardDeny(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping Unix hard-deny test on Windows")
+	}
+	// /proc is a pseudo-filesystem in the hard-deny set even for reads.
+	_, _, err := OpenForRead("/proc/self/mem", 0)
+	if err != ErrHardDeny {
+		t.Errorf("OpenForRead(/proc/...) = %v, want %v", err, ErrHardDeny)
+	}
+}
+
+func TestOpenForRead_AllowsDangerousPrefix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping Unix path test on Windows")
+	}
+	// Reads of "dangerous" prefixes (e.g. /usr) are allowed without force —
+	// the file may not exist here, but the error must be a stat error, never a
+	// policy denial.
+	_, _, err := OpenForRead("/usr/nonexistent-rebase-test-file", 0)
+	if err == ErrDangerousPath || err == ErrHardDeny {
+		t.Errorf("OpenForRead(/usr/...) = %v, want a non-policy error", err)
 	}
 }
 

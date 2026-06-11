@@ -69,6 +69,7 @@ type Handlers struct {
 	SwitchVariant   func(SwitchVariantRequest)
 	CheckUpdates    func(CheckUpdatesRequest)
 	DirList         func(DirListRequest)
+	FileGet         func(FileGetRequest)
 	FilePutStart    func(FilePutStartRequest)
 	FilePutChunk    func(FilePutChunk)
 	FilePutFinish   func(FilePutFinishRequest)
@@ -272,6 +273,26 @@ type FilePutFinishRequest struct {
 
 // FilePutResult is the agent's response to a file upload.
 type FilePutResult struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	OK        bool   `json:"ok"`
+	Path      string `json:"path,omitempty"`
+	Size      int64  `json:"size,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// FileGetRequest asks the agent to read a file and stream it back as chunks.
+// This is the read half of the file API; the response is one or more
+// file_get_chunk frames followed by a terminal file_get_result.
+type FileGetRequest struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	Path      string `json:"path"`
+	MaxSize   int64  `json:"maxSize,omitempty"` // Optional cap; 0 = agent default limit
+}
+
+// FileGetResult is the terminal frame of a file read (after all chunks).
+type FileGetResult struct {
 	ClientID  string `json:"clientId"`
 	RequestID string `json:"requestId"`
 	OK        bool   `json:"ok"`
@@ -875,6 +896,16 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 		}
 		if c.handlers.DirList != nil {
 			c.handlers.DirList(msg)
+		}
+
+	case "file_get_request":
+		var msg FileGetRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal file_get_request payload", "error", err)
+			return
+		}
+		if c.handlers.FileGet != nil {
+			c.handlers.FileGet(msg)
 		}
 
 	case "file_put_start":
