@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/austinkregel/compute-agent/internal/directserver"
 	"github.com/austinkregel/compute-agent/internal/kiosk"
 	"github.com/austinkregel/compute-agent/pkg/admin"
 	"github.com/austinkregel/compute-agent/pkg/backup"
@@ -78,6 +79,7 @@ type Agent struct {
 	backups   *backup.Coordinator
 	uploads   *fileops.UploadManager
 	kiosk     kiosk.Manager
+	direct    *directserver.Server
 
 	ctx context.Context
 
@@ -214,6 +216,17 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		}
 	}
 
+	// Optional inbound listener for direct IDE connections. Misconfiguration is
+	// non-fatal: log and leave it disabled so the control-plane path still runs.
+	if cfg.DirectMode.Enabled {
+		ds, err := directserver.New(cfg, log.With("component", "directmode"))
+		if err != nil {
+			log.Error("direct mode enabled but misconfigured; not starting", "error", err)
+		} else {
+			agent.direct = ds
+		}
+	}
+
 	return agent, nil
 }
 
@@ -223,13 +236,22 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer cancel()
 	a.ctx = ctx
 
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 4)
 
 	go func() { errCh <- a.transport.Run(ctx) }()
 	go func() { errCh <- a.telemetry.Run(ctx) }()
 
 	go a.runDockerEventWatcher()
 	go a.runContainerMetricsEmitter()
+
+	if a.direct != nil {
+		go func() {
+			if err := a.direct.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				a.log.Error("direct mode listener error", "error", err)
+				errCh <- err
+			}
+		}()
+	}
 
 	// Start kiosk subsystem if enabled
 	if a.kiosk != nil {

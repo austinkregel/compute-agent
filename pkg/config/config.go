@@ -35,6 +35,51 @@ type Config struct {
 	Alerts         AlertsConfig       `json:"alerts"`
 	Variant        VariantConfig      `json:"variant"`
 	Docker         DockerConfig       `json:"docker"`
+	DirectMode     DirectModeConfig   `json:"directMode"`
+}
+
+// DirectModeConfig configures the optional inbound listener that lets a trusted
+// IDE client (the rebase desktop app) connect to the agent directly over a
+// private network, bypassing the control plane. See docs/DIRECT_MODE.md.
+//
+// SAFETY: this is the agent's only inbound, network-facing surface. It is
+// disabled by default and refuses to start unless TLS, OIDC, allowed roots, and
+// an explicit bind address are all configured. It exposes ONLY file and shell
+// operations (a strict subset of the control-plane command set) and confines
+// every path to AllowedRoots.
+type DirectModeConfig struct {
+	// Enabled starts the inbound WSS listener. Default false.
+	Enabled bool `json:"enabled"`
+	// ListenAddr is the bind address, e.g. "100.64.0.5:7420". Bind to the VPN
+	// interface; there is intentionally no default (refuses to start if empty).
+	ListenAddr string `json:"listenAddr"`
+	// TLSCertFile / TLSKeyFile are required — the listener never serves plaintext.
+	TLSCertFile string `json:"tlsCertFile"`
+	TLSKeyFile  string `json:"tlsKeyFile"`
+	// AllowedRoots confines file/dir operations. If empty, falls back to
+	// DirBrowse.AllowedRoots; if both are empty the listener refuses to start.
+	AllowedRoots []string `json:"allowedRoots"`
+	// MaxConns caps concurrent authenticated connections (default 4).
+	MaxConns int `json:"maxConns"`
+	// MaxUploadBytes caps a single file upload (default 100 MiB).
+	MaxUploadBytes int64 `json:"maxUploadBytes"`
+	// OIDC configures token verification against the issuer.
+	OIDC DirectOIDCConfig `json:"oidc"`
+}
+
+// DirectOIDCConfig configures Machine Token verification for direct mode.
+type DirectOIDCConfig struct {
+	// Issuer is the OIDC issuer base URL (e.g. "https://aut.hair").
+	Issuer string `json:"issuer"`
+	// Audience is the rebase-ide machine client_id; incoming tokens must carry
+	// exactly this aud. Required.
+	Audience string `json:"audience"`
+	// RequiredScope must be present in the token (default "openid").
+	RequiredScope string `json:"requiredScope"`
+	// MachineInfoProbe enables the /api/machine-info revocation probe (default true).
+	MachineInfoProbe bool `json:"machineInfoProbe"`
+	// ProbeIntervalSec re-checks revocation while connected (default 60).
+	ProbeIntervalSec int `json:"probeIntervalSec"`
 }
 
 // DockerConfig controls Docker integration and Swarm management.
@@ -266,6 +311,15 @@ func defaultConfig() Config {
 		},
 		Kiosk: KioskConfig{
 			ListenAddr: "127.0.0.1:0",
+		},
+		DirectMode: DirectModeConfig{
+			MaxConns:       4,
+			MaxUploadBytes: 100 << 20, // 100 MiB
+			OIDC: DirectOIDCConfig{
+				RequiredScope:    "openid",
+				MachineInfoProbe: true,
+				ProbeIntervalSec: 60,
+			},
 		},
 		Alerts: AlertsConfig{
 			Enabled:         runtime.GOOS == "linux",
