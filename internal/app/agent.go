@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -130,7 +129,8 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		SwitchVariant:   agent.handleSwitchVariant,
 		CheckUpdates:    agent.handleCheckUpdates,
 		DirList:         agent.handleDirListRequest,
-		GitStatus:       agent.handleGitStatusRequest,
+		Exec:            agent.handleExecRequest,
+		ExecAllowlist:   agent.handleExecAllowlist,
 		FileGet:         agent.handleFileGetRequest,
 		FilePutStart:    agent.handleFilePutStart,
 		FilePutChunk:    agent.handleFilePutChunk,
@@ -720,79 +720,53 @@ func toTransportDirEntries(in []dirbrowse.Entry) []transport.DirListEntry {
 	return out
 }
 
-// --- Git status handler ---
+// --- Exec handlers ---
 
-// handleGitStatusRequest reports the git branch + dirty-file count of a working
-// directory. Read-only probe: runs git directly (not via the operator command
-// runner) confined to a validated absolute path with a short timeout.
-func (a *Agent) handleGitStatusRequest(msg transport.GitStatusRequest) {
-	resp := transport.GitStatusResponse{
-		ClientID:  a.cfg.ClientID,
-		RequestID: msg.RequestID,
-		Path:      msg.Path,
-	}
-	fail := func(reason string) {
-		resp.OK = false
-		resp.Error = reason
-		if err := a.transport.Emit("git_status_response", resp); err != nil {
-			a.log.Error("failed to emit git_status_response", "requestId", msg.RequestID, "error", err)
+// handleExecRequest runs an allowlisted command and returns its output. The
+// command policy (allowlist) is enforced by the runner; cwd, when provided, is
+// confined to the IDE's allowed roots here before running.
+func (a *Agent) handleExecRequest(msg transport.ExecRequest) {
+	result := transport.ExecResult{ClientID: a.cfg.ClientID, RequestID: msg.RequestID}
+	emit := func() {
+		if err := a.transport.Emit("exec_result", result); err != nil {
+			a.log.Error("failed to emit exec_result", "requestId", msg.RequestID, "error", err)
 		}
 	}
 
-	dir, err := fileops.ValidatePath(msg.Path)
-	if err != nil {
-		fail(err.Error())
-		return
-	}
-	if info, err := os.Stat(dir); err != nil {
-		fail(err.Error())
-		return
-	} else if !info.IsDir() {
-		fail("path is not a directory")
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(a.ctxOrBackground(), 5*time.Second)
-	defer cancel()
-
-	branch, err := runGit(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		fail("not a git repository")
-		return
-	}
-	status, err := runGit(ctx, dir, "status", "--porcelain")
-	if err != nil {
-		fail(err.Error())
-		return
-	}
-
-	resp.OK = true
-	resp.Branch = strings.TrimSpace(branch)
-	resp.Dirty = countNonEmptyLines(status)
-	if err := a.transport.Emit("git_status_response", resp); err != nil {
-		a.log.Error("failed to emit git_status_response", "requestId", msg.RequestID, "error", err)
-	}
-}
-
-// runGit runs `git -C <dir> <args...>` with locks disabled (read-only safety).
-func runGit(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
-}
-
-func countNonEmptyLines(s string) int {
-	n := 0
-	for _, line := range strings.Split(s, "\n") {
-		if strings.TrimSpace(line) != "" {
-			n++
+	cwd := strings.TrimSpace(msg.Cwd)
+	if cwd != "" {
+		clean, err := dirbrowse.ValidateAbsoluteDirPath(cwd)
+		if err != nil {
+			result.Error = err.Error()
+			result.Stderr = err.Error()
+			result.Code = 126
+			emit()
+			return
 		}
+		if err := dirbrowse.EnforceAllowedRoots(clean, a.cfg.DirBrowse.AllowedRoots); err != nil {
+			result.Error = err.Error()
+			result.Stderr = "cwd not allowed"
+			result.Code = 126
+			emit()
+			return
+		}
+		cwd = clean
 	}
-	return n
+
+	res := a.admin.Exec(a.ctxOrBackground(), msg.Command, cwd, time.Duration(msg.TimeoutSec)*time.Second)
+	result.Code = res.Summary.Code
+	result.Stdout = res.Stdout
+	result.Stderr = res.Stderr
+	result.Error = res.Error
+	result.OK = res.Error == "" && res.Summary.Code == 0
+	a.log.Info("exec_request completed", "requestId", msg.RequestID, "code", result.Code, "error", result.Error)
+	emit()
+}
+
+// handleExecAllowlist applies a command allowlist pushed by the control plane.
+func (a *Agent) handleExecAllowlist(msg transport.ExecAllowlist) {
+	a.admin.SetAllowlist(msg.Commands)
+	a.log.Info("exec allowlist updated", "count", len(msg.Commands))
 }
 
 // --- File operation handlers ---

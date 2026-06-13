@@ -40,7 +40,8 @@ type Runner struct {
 	sessionsMu sync.RWMutex
 	sessions   map[string]*shellSession
 
-	allowed [][]string
+	allowedMu sync.RWMutex
+	allowed   [][]string
 
 	rateMu          sync.Mutex
 	rateWindowStart time.Time
@@ -248,6 +249,95 @@ func (r *Runner) RunCommand(ctx context.Context, req CommandRequest) CommandResu
 			Code:       code,
 			DurationMs: duration.Milliseconds(),
 		},
+	}
+	if runErr != nil {
+		res.Error = runErr.Error()
+	}
+	return res
+}
+
+// SetAllowlist replaces the command allowlist at runtime (the control plane
+// pushes the canonical list to agents). An empty list means "allow any command"
+// (matches isAllowed). Thread-safe; governs both admin_run and Exec.
+func (r *Runner) SetAllowlist(entries []string) {
+	var next [][]string
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		toks, err := tokenizeCommandLine(entry)
+		if err != nil || len(toks) == 0 {
+			continue
+		}
+		next = append(next, toks)
+	}
+	r.allowedMu.Lock()
+	r.allowed = next
+	r.allowedMu.Unlock()
+}
+
+// Exec runs a generic IDE command: same guards as RunCommand (forbidden chars,
+// tokenize, allowlist, rate limit, timeout, output capture) but the caller is
+// responsible for validating/confining cwd (the IDE confines to its browse
+// roots, not the operator AllowedCwds policy).
+func (r *Runner) Exec(ctx context.Context, command, cwd string, timeout time.Duration) CommandResult {
+	if strings.TrimSpace(command) == "" {
+		return CommandResult{Error: "empty command", Summary: CommandSummary{Code: 1}}
+	}
+	if !r.allowRequest() {
+		return CommandResult{Error: "rate limited", Stderr: "rate limited", Summary: CommandSummary{Code: 429}}
+	}
+	if hasForbiddenShellChars(command) {
+		return CommandResult{Error: "command contains forbidden characters", Stderr: "command blocked: forbidden characters", Summary: CommandSummary{Code: 126}}
+	}
+	tokens, err := tokenizeCommandLine(command)
+	if err != nil || len(tokens) == 0 {
+		return CommandResult{Error: fmt.Sprintf("invalid command: %v", err), Stderr: "command blocked: invalid command", Summary: CommandSummary{Code: 126}}
+	}
+	if !r.isAllowed(tokens) {
+		return CommandResult{Error: "command not allowed", Stderr: "command blocked by allowlist", Summary: CommandSummary{Code: 126}}
+	}
+
+	if timeout <= 0 {
+		timeout = time.Duration(r.cfg.Admin.DefaultTimeoutSec) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	if err := r.acquire(ctx); err != nil {
+		return CommandResult{Error: err.Error(), Summary: CommandSummary{Code: 1}}
+	}
+	defer r.release()
+
+	cmd := exec.CommandContext(ctx, tokens[0], tokens[1:]...)
+	cmd.Env = sanitizedEnv()
+	if strings.TrimSpace(cwd) != "" {
+		cmd.Dir = cwd
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	start := time.Now()
+	runErr := cmd.Run()
+	duration := time.Since(start)
+
+	code := 0
+	if runErr != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			code = 124
+		} else if exitErr, ok := runErr.(*exec.ExitError); ok {
+			code = exitStatus(exitErr)
+		} else {
+			code = 1
+		}
+	}
+	res := CommandResult{
+		Stdout:  stdout.String(),
+		Stderr:  stderr.String(),
+		Summary: CommandSummary{Code: code, DurationMs: duration.Milliseconds()},
 	}
 	if runErr != nil {
 		res.Error = runErr.Error()
@@ -626,11 +716,14 @@ func (r *Runner) removeSession(sessionID string) *shellSession {
 }
 
 func (r *Runner) isAllowed(tokens []string) bool {
-	if len(r.allowed) == 0 {
+	r.allowedMu.RLock()
+	allowedList := r.allowed
+	r.allowedMu.RUnlock()
+	if len(allowedList) == 0 {
 		return true
 	}
 	cmdNorm := normalizeTokens(tokens)
-	for _, allowed := range r.allowed {
+	for _, allowed := range allowedList {
 		allowedNorm := normalizeTokens(allowed)
 		if len(cmdNorm) < len(allowedNorm) {
 			continue

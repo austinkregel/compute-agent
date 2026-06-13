@@ -69,7 +69,8 @@ type Handlers struct {
 	SwitchVariant   func(SwitchVariantRequest)
 	CheckUpdates    func(CheckUpdatesRequest)
 	DirList         func(DirListRequest)
-	GitStatus       func(GitStatusRequest)
+	Exec            func(ExecRequest)
+	ExecAllowlist   func(ExecAllowlist)
 	FileGet         func(FileGetRequest)
 	FilePutStart    func(FilePutStartRequest)
 	FilePutChunk    func(FilePutChunk)
@@ -284,24 +285,33 @@ type FilePutResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// GitStatusRequest asks the agent for the git branch + dirty-file count of a
-// working directory. Read-only; used by the IDE status tray.
-type GitStatusRequest struct {
-	ClientID  string `json:"clientId"`
-	RequestID string `json:"requestId"`
-	Path      string `json:"path"`
+// ExecRequest asks the agent to run an allowlisted command and return its
+// output. Generic IDE primitive (git status, build, test, lint, … are all
+// client-side helpers over this). cwd, when set, is confined to the IDE's
+// allowed roots by the agent.
+type ExecRequest struct {
+	ClientID   string `json:"clientId"`
+	RequestID  string `json:"requestId"`
+	Command    string `json:"command"`
+	Cwd        string `json:"cwd,omitempty"`
+	TimeoutSec int    `json:"timeoutSec,omitempty"`
 }
 
-// GitStatusResponse reports a directory's git state. OK=false (with Error) when
-// the path isn't a git repository or git is unavailable.
-type GitStatusResponse struct {
+// ExecResult is the agent's response to an ExecRequest.
+type ExecResult struct {
 	ClientID  string `json:"clientId"`
 	RequestID string `json:"requestId"`
 	OK        bool   `json:"ok"`
-	Path      string `json:"path,omitempty"`
-	Branch    string `json:"branch,omitempty"`
-	Dirty     int    `json:"dirty"`
+	Code      int    `json:"code"`
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
 	Error     string `json:"error,omitempty"`
+}
+
+// ExecAllowlist is pushed by the control plane to set the agent's command
+// allowlist (governs both exec and admin_run). Central policy, not per-agent.
+type ExecAllowlist struct {
+	Commands []string `json:"commands"`
 }
 
 // FileGetRequest asks the agent to read a file and stream it back as chunks.
@@ -956,14 +966,24 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			c.handlers.DirList(msg)
 		}
 
-	case "git_status_request":
-		var msg GitStatusRequest
+	case "exec_request":
+		var msg ExecRequest
 		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("failed to unmarshal git_status_request payload", "error", err)
+			c.log.Error("failed to unmarshal exec_request payload", "error", err)
 			return
 		}
-		if c.handlers.GitStatus != nil {
-			c.handlers.GitStatus(msg)
+		if c.handlers.Exec != nil {
+			c.handlers.Exec(msg)
+		}
+
+	case "exec_allowlist":
+		var msg ExecAllowlist
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal exec_allowlist payload", "error", err)
+			return
+		}
+		if c.handlers.ExecAllowlist != nil {
+			c.handlers.ExecAllowlist(msg)
 		}
 
 	case "file_get_request":

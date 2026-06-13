@@ -1067,7 +1067,7 @@ func TestDispatchSignedCommand_AllEvents(t *testing.T) {
 		"log_tail_start", "log_tail_stop",
 		"backup_plan", "backup_start",
 		"sync_keys", "agent_update", "switch_variant", "check_updates",
-		"dir_list_request", "git_status_request", "file_get_request",
+		"dir_list_request", "exec_request", "exec_allowlist", "file_get_request",
 		"file_put_start", "file_put_chunk", "file_put_finish",
 		"file_delete_request", "file_chmod_request",
 		"file_mkdir_request", "file_rename_request",
@@ -1109,8 +1109,10 @@ func TestDispatchSignedCommand_AllEvents(t *testing.T) {
 				handlers.CheckUpdates = func(CheckUpdatesRequest) { mu.Lock(); called = true; mu.Unlock() }
 			case "dir_list_request":
 				handlers.DirList = func(DirListRequest) { mu.Lock(); called = true; mu.Unlock() }
-			case "git_status_request":
-				handlers.GitStatus = func(GitStatusRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "exec_request":
+				handlers.Exec = func(ExecRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "exec_allowlist":
+				handlers.ExecAllowlist = func(ExecAllowlist) { mu.Lock(); called = true; mu.Unlock() }
 			case "file_get_request":
 				handlers.FileGet = func(FileGetRequest) { mu.Lock(); called = true; mu.Unlock() }
 			case "file_put_start":

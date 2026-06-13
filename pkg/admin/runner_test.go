@@ -760,3 +760,60 @@ func TestRunCommand_DefaultTimeout(t *testing.T) {
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
+
+func TestExec_AllowlistAndCwd(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell command test not portable to windows")
+	}
+	log, _ := logging.New(logging.Options{Level: "error"})
+	cfg := &config.Config{Admin: config.AdminConfig{Allowed: []string{"echo"}, MaxConcurrent: 1, DefaultTimeoutSec: 5}}
+	r := NewRunner(cfg, log, ShellCallbacks{})
+
+	// Allowlisted command runs.
+	ok := r.Exec(context.Background(), "echo hi", "", time.Second)
+	if ok.Summary.Code != 0 || strings.TrimSpace(ok.Stdout) != "hi" {
+		t.Fatalf("echo: code=%d stdout=%q err=%s", ok.Summary.Code, ok.Stdout, ok.Error)
+	}
+
+	// Non-allowlisted command blocked.
+	blocked := r.Exec(context.Background(), "uptime", "", time.Second)
+	if blocked.Summary.Code != 126 {
+		t.Fatalf("expected blocked (126), got %d", blocked.Summary.Code)
+	}
+
+	// Runs in the requested cwd. (Resolve symlinks: macOS /var → /private/var.)
+	dir := t.TempDir()
+	resolved, _ := filepath.EvalSymlinks(dir)
+	r.SetAllowlist([]string{"pwd"})
+	pwd := r.Exec(context.Background(), "pwd", dir, time.Second)
+	if got := strings.TrimSpace(pwd.Stdout); pwd.Summary.Code != 0 || (got != dir && got != resolved) {
+		t.Fatalf("pwd in cwd: code=%d stdout=%q want %q", pwd.Summary.Code, got, dir)
+	}
+}
+
+func TestSetAllowlist_UpdatesPolicy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell command test not portable to windows")
+	}
+	log, _ := logging.New(logging.Options{Level: "error"})
+	cfg := &config.Config{Admin: config.AdminConfig{Allowed: []string{"echo"}, MaxConcurrent: 1, DefaultTimeoutSec: 5}}
+	r := NewRunner(cfg, log, ShellCallbacks{})
+
+	// Initially only echo is allowed.
+	if r.Exec(context.Background(), "true", "", time.Second).Summary.Code != 126 {
+		t.Fatal("expected 'true' blocked before allowlist update")
+	}
+	// Push a new allowlist; now 'true' is allowed and 'echo' is not.
+	r.SetAllowlist([]string{"true"})
+	if code := r.Exec(context.Background(), "true", "", time.Second).Summary.Code; code != 0 {
+		t.Fatalf("expected 'true' allowed after update, got %d", code)
+	}
+	if code := r.Exec(context.Background(), "echo x", "", time.Second).Summary.Code; code != 126 {
+		t.Fatalf("expected 'echo' blocked after update, got %d", code)
+	}
+	// Empty allowlist = allow any.
+	r.SetAllowlist(nil)
+	if code := r.Exec(context.Background(), "echo x", "", time.Second).Summary.Code; code != 0 {
+		t.Fatalf("expected allow-all with empty allowlist, got %d", code)
+	}
+}
