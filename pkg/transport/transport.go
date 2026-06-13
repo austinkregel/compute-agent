@@ -100,6 +100,10 @@ type Handlers struct {
 	ComposeScan        func(ComposeScanRequest)
 	ComposeParse       func(ComposeParseRequest)
 	ContainerLogs      func(ContainerLogsRequest)
+
+	// NotifySubscribers reports how many dashboards are currently connected, so
+	// the agent can gate desktop-notification forwarding.
+	NotifySubscribers func(NotifySubscribers)
 }
 
 // AdminCommand mirrors the payload emitted by the control plane.
