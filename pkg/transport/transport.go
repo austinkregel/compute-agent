@@ -69,12 +69,15 @@ type Handlers struct {
 	SwitchVariant   func(SwitchVariantRequest)
 	CheckUpdates    func(CheckUpdatesRequest)
 	DirList         func(DirListRequest)
+	GitStatus       func(GitStatusRequest)
 	FileGet         func(FileGetRequest)
 	FilePutStart    func(FilePutStartRequest)
 	FilePutChunk    func(FilePutChunk)
 	FilePutFinish   func(FilePutFinishRequest)
 	FileDelete      func(FileDeleteRequest)
 	FileChmod       func(FileChmodRequest)
+	FileMkdir       func(FileMkdirRequest)
+	FileRename      func(FileRenameRequest)
 	KioskSet        func(KioskSetRequest)
 	KioskSaveLayout func(KioskSaveLayoutRequest)
 	KioskGetLayouts func(KioskGetLayoutsRequest)
@@ -281,6 +284,26 @@ type FilePutResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// GitStatusRequest asks the agent for the git branch + dirty-file count of a
+// working directory. Read-only; used by the IDE status tray.
+type GitStatusRequest struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	Path      string `json:"path"`
+}
+
+// GitStatusResponse reports a directory's git state. OK=false (with Error) when
+// the path isn't a git repository or git is unavailable.
+type GitStatusResponse struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	OK        bool   `json:"ok"`
+	Path      string `json:"path,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	Dirty     int    `json:"dirty"`
+	Error     string `json:"error,omitempty"`
+}
+
 // FileGetRequest asks the agent to read a file and stream it back as chunks.
 // This is the read half of the file API; the response is one or more
 // file_get_chunk frames followed by a terminal file_get_result.
@@ -316,6 +339,41 @@ type FileDeleteResult struct {
 	RequestID string `json:"requestId"`
 	OK        bool   `json:"ok"`
 	Path      string `json:"path,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// FileMkdirRequest asks the agent to create a directory (and parents).
+type FileMkdirRequest struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	Path      string `json:"path"`
+	Force     bool   `json:"force"`
+}
+
+// FileMkdirResult is the agent's response to a mkdir request.
+type FileMkdirResult struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	OK        bool   `json:"ok"`
+	Path      string `json:"path,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// FileRenameRequest asks the agent to rename/move a file or directory.
+type FileRenameRequest struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	Path      string `json:"path"`    // source
+	NewPath   string `json:"newPath"` // destination
+	Force     bool   `json:"force"`
+}
+
+// FileRenameResult is the agent's response to a rename request.
+type FileRenameResult struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
+	OK        bool   `json:"ok"`
+	Path      string `json:"path,omitempty"` // destination on success
 	Error     string `json:"error,omitempty"`
 }
 
@@ -898,6 +956,16 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			c.handlers.DirList(msg)
 		}
 
+	case "git_status_request":
+		var msg GitStatusRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal git_status_request payload", "error", err)
+			return
+		}
+		if c.handlers.GitStatus != nil {
+			c.handlers.GitStatus(msg)
+		}
+
 	case "file_get_request":
 		var msg FileGetRequest
 		if err := json.Unmarshal(payload, &msg); err != nil {
@@ -956,6 +1024,26 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 		}
 		if c.handlers.FileChmod != nil {
 			c.handlers.FileChmod(msg)
+		}
+
+	case "file_mkdir_request":
+		var msg FileMkdirRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal file_mkdir_request payload", "error", err)
+			return
+		}
+		if c.handlers.FileMkdir != nil {
+			c.handlers.FileMkdir(msg)
+		}
+
+	case "file_rename_request":
+		var msg FileRenameRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal file_rename_request payload", "error", err)
+			return
+		}
+		if c.handlers.FileRename != nil {
+			c.handlers.FileRename(msg)
 		}
 
 	case "kiosk_set":

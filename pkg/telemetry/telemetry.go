@@ -50,6 +50,11 @@ type Publisher struct {
 	// Used by the kiosk subsystem to display live stats on the dashboard view.
 	OnSample func([]byte)
 
+	// DirectAdvert, when set, returns the current direct-connection advertisement
+	// to embed in each stats sample. Wired by agent.New only when direct mode is
+	// active; nil otherwise (the `direct` field is omitted → backward compatible).
+	DirectAdvert func() *DirectAdvert
+
 	warnMu          sync.Mutex
 	lastBatteryWarn time.Time
 	lastThermalWarn time.Time
@@ -406,6 +411,15 @@ func (p *Publisher) emitSample() {
 		}
 	}
 
+	// Direct-connection advertisement (only when direct mode is enabled and the
+	// hook is wired in agent.New). Surfaced to the IDE via the control plane's
+	// client_list so it can attempt a P2P connection.
+	if p.DirectAdvert != nil {
+		if adv := p.DirectAdvert(); adv != nil {
+			sample.Direct = adv
+		}
+	}
+
 	if err := p.emitter.Emit("stats", map[string]any{"data": sample}); err != nil {
 		p.log.Debug("skipping stats emit (transport offline)", "error", err)
 	}
@@ -570,7 +584,18 @@ type StatsSample struct {
 	TimeSyncStatus      string                   `json:"timeSyncStatus,omitempty"`
 	Alerts              *sysalerts.AlertSnapshot `json:"alerts,omitempty"`
 	Docker              *docker.DockerStatus     `json:"docker,omitempty"`
+	Direct              *DirectAdvert            `json:"direct,omitempty"`
 	Timestamp           string                   `json:"ts"`
+}
+
+// DirectAdvert advertises how the IDE can reach this agent directly (P2P). The
+// control plane copies these fields into client_list so the IDE can dial the
+// agent without relaying. Omitted entirely when direct mode is disabled.
+type DirectAdvert struct {
+	Addr        string `json:"addr"`
+	CertSha256  string `json:"certSha256"`
+	PinRequired bool   `json:"pinRequired"`
+	Scheme      string `json:"scheme"`
 }
 
 type ServiceHealth struct {

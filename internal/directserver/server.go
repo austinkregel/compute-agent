@@ -2,7 +2,10 @@ package directserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -29,6 +32,7 @@ type Server struct {
 	maxBytes      int64
 	probeInterval time.Duration
 	sem           chan struct{} // bounds concurrent authenticated connections
+	reloader      *certReloader // serves + reloads the TLS cert; also backs Advert()
 }
 
 // New validates the direct-mode config and builds the server. It returns an
@@ -75,6 +79,57 @@ func New(cfg *config.Config, log *logging.Logger) (*Server, error) {
 		maxBytes:      maxBytes,
 		probeInterval: interval,
 		sem:           make(chan struct{}, maxConns),
+		reloader:      &certReloader{certFile: dm.TLSCertFile, keyFile: dm.TLSKeyFile},
+	}, nil
+}
+
+// Advert describes how the IDE should reach this agent directly (P2P). It is
+// surfaced through the agent's telemetry → control plane client_list.
+type Advert struct {
+	// Addr is the routable host:port to dial (AdvertiseAddr, or ListenAddr).
+	Addr string
+	// CertSha256 is the hex SHA-256 of the leaf certificate's DER bytes, matching
+	// the IDE's pinned-verifier hash.
+	CertSha256 string
+	// PinRequired is true for self-signed certs (the IDE pins CertSha256); false
+	// when the cert chains to a public CA (validate against system roots).
+	PinRequired bool
+	// Scheme is the dial scheme ("wss").
+	Scheme string
+}
+
+// Advert returns the current direct-connection advertisement, or an error if
+// the certificate can't be loaded. The fingerprint is read from the live
+// (hot-reloadable) cert so it stays correct across wildcard renewals.
+func (s *Server) Advert() (*Advert, error) {
+	dm := s.cfg.DirectMode
+	addr := strings.TrimSpace(dm.AdvertiseAddr)
+	if addr == "" {
+		addr = dm.ListenAddr
+	}
+	cert, err := s.reloader.GetCertificate(nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(cert.Certificate) == 0 {
+		return nil, errors.New("loaded certificate has no DER chain")
+	}
+	sum := sha256.Sum256(cert.Certificate[0]) // leaf DER
+	pinRequired := !dm.PublicCert
+	if !pinRequired {
+		// Sanity: a self-signed leaf (Issuer == Subject) always needs a pin even
+		// if PublicCert was set by mistake.
+		if leaf, perr := x509.ParseCertificate(cert.Certificate[0]); perr == nil {
+			if leaf.Issuer.String() == leaf.Subject.String() {
+				pinRequired = true
+			}
+		}
+	}
+	return &Advert{
+		Addr:        addr,
+		CertSha256:  hex.EncodeToString(sum[:]),
+		PinRequired: pinRequired,
+		Scheme:      "wss",
 	}, nil
 }
 
@@ -85,8 +140,8 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Hot-reload the TLS cert so wildcard renewals (e.g. *.kregel.host pulled by
 	// download-ssl-certificates.sh) are picked up without restarting the agent.
-	reloader := &certReloader{certFile: dm.TLSCertFile, keyFile: dm.TLSKeyFile}
-	if _, err := reloader.GetCertificate(nil); err != nil {
+	// The reloader is built in New() and shared with Advert().
+	if _, err := s.reloader.GetCertificate(nil); err != nil {
 		return err // refuse to serve without a loadable cert
 	}
 
@@ -95,7 +150,7 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		TLSConfig: &tls.Config{
-			GetCertificate: reloader.GetCertificate,
+			GetCertificate: s.reloader.GetCertificate,
 			MinVersion:     tls.VersionTLS12,
 		},
 	}

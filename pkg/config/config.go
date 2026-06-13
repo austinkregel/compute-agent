@@ -63,6 +63,16 @@ type DirectModeConfig struct {
 	MaxConns int `json:"maxConns"`
 	// MaxUploadBytes caps a single file upload (default 100 MiB).
 	MaxUploadBytes int64 `json:"maxUploadBytes"`
+	// AdvertiseAddr is the routable host:port the IDE should dial for a direct
+	// (P2P) connection, when it differs from ListenAddr (e.g. a VPN address vs a
+	// 0.0.0.0 bind). If empty, ListenAddr is advertised. Surfaced to the IDE via
+	// the control plane's client_list so it can attempt a direct connection.
+	AdvertiseAddr string `json:"advertiseAddr"`
+	// PublicCert indicates the TLS cert chains to a public CA (e.g. a
+	// *.kregel.host wildcard), so the IDE should validate against system roots
+	// rather than pinning the leaf fingerprint. Defaults to false (self-signed →
+	// the IDE pins the advertised fingerprint).
+	PublicCert bool `json:"publicCert"`
 	// OIDC configures token verification against the issuer.
 	OIDC DirectOIDCConfig `json:"oidc"`
 }

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 // --- Path validation errors ---
@@ -454,6 +455,107 @@ func ChmodFile(path, modeStr string, force bool) (string, error) {
 	}
 
 	return absPath, nil
+}
+
+// --- Mkdir / Rename operations ---
+
+// Mkdir creates a directory (and any missing parents), enforcing path policy.
+// Returns the cleaned absolute path.
+func Mkdir(path string, force bool) (string, error) {
+	absPath, err := ValidatePath(path)
+	if err != nil {
+		return "", err
+	}
+	if err := CheckPathPolicy(absPath, force); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(absPath, 0o755); err != nil {
+		return "", err
+	}
+	return absPath, nil
+}
+
+// Rename moves/renames a file or directory. Both endpoints are validated and
+// policy-checked. os.Rename handles same-filesystem moves; a cross-device move
+// falls back to copy-then-remove. Returns the cleaned destination path.
+func Rename(oldPath, newPath string, force bool) (string, error) {
+	src, err := ValidatePath(oldPath)
+	if err != nil {
+		return "", err
+	}
+	dst, err := ValidatePath(newPath)
+	if err != nil {
+		return "", err
+	}
+	if err := CheckPathPolicy(src, force); err != nil {
+		return "", err
+	}
+	if err := CheckPathPolicy(dst, force); err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(src); err != nil {
+		return "", err
+	}
+	// Don't clobber an existing destination unless forced.
+	if _, err := os.Stat(dst); err == nil && !force {
+		return "", fmt.Errorf("destination exists: %s", dst)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return "", fmt.Errorf("create destination parent: %w", err)
+	}
+	if err := os.Rename(src, dst); err != nil {
+		// EXDEV (cross-device) → fall back to copy + remove.
+		if isCrossDevice(err) {
+			if cerr := copyTree(src, dst); cerr != nil {
+				return "", cerr
+			}
+			if rerr := os.RemoveAll(src); rerr != nil {
+				return "", rerr
+			}
+			return dst, nil
+		}
+		return "", err
+	}
+	return dst, nil
+}
+
+func isCrossDevice(err error) bool {
+	return errors.Is(err, syscall.EXDEV)
+}
+
+// copyTree recursively copies a file or directory tree from src to dst.
+func copyTree(src, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
 
 // parseMode parses a permission mode string (octal like "0755" or "755").

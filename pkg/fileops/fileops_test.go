@@ -310,6 +310,72 @@ func TestOpenForRead_AllowsDangerousPrefix(t *testing.T) {
 	}
 }
 
+func TestMkdir_CreatesNestedDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "a", "b", "c")
+	got, err := Mkdir(target, false)
+	if err != nil {
+		t.Fatalf("Mkdir = %v, want nil", err)
+	}
+	if got != target {
+		t.Errorf("returned path = %q, want %q", got, target)
+	}
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		t.Errorf("directory not created: %v", err)
+	}
+}
+
+func TestMkdir_RejectsTraversal(t *testing.T) {
+	if _, err := Mkdir("/tmp/../etc/evil", false); err != ErrPathTraversal {
+		t.Errorf("Mkdir(traversal) = %v, want %v", err, ErrPathTraversal)
+	}
+}
+
+func TestRename_MovesFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "old.txt")
+	dst := filepath.Join(tmpDir, "sub", "new.txt")
+	if err := os.WriteFile(src, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Rename(src, dst, false)
+	if err != nil {
+		t.Fatalf("Rename = %v, want nil", err)
+	}
+	if got != dst {
+		t.Errorf("returned path = %q, want %q", got, dst)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Error("source still exists after rename")
+	}
+	if b, err := os.ReadFile(dst); err != nil || string(b) != "data" {
+		t.Errorf("destination content = %q, err %v", b, err)
+	}
+}
+
+func TestRename_RefusesToClobberWithoutForce(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "a.txt")
+	dst := filepath.Join(tmpDir, "b.txt")
+	_ = os.WriteFile(src, []byte("a"), 0o644)
+	_ = os.WriteFile(dst, []byte("b"), 0o644)
+	if _, err := Rename(src, dst, false); err == nil {
+		t.Error("expected error renaming onto an existing file without force")
+	}
+	// With force it overwrites.
+	if _, err := Rename(src, dst, true); err != nil {
+		t.Errorf("Rename force = %v, want nil", err)
+	}
+}
+
+func TestRename_MissingSourceErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+	_, err := Rename(filepath.Join(tmpDir, "nope"), filepath.Join(tmpDir, "x"), false)
+	if err == nil {
+		t.Error("expected error renaming a missing source")
+	}
+}
+
 func TestChmodFile_NotSupportedOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Skipping Windows chmod test on non-Windows")

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -129,12 +130,15 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		SwitchVariant:   agent.handleSwitchVariant,
 		CheckUpdates:    agent.handleCheckUpdates,
 		DirList:         agent.handleDirListRequest,
+		GitStatus:       agent.handleGitStatusRequest,
 		FileGet:         agent.handleFileGetRequest,
 		FilePutStart:    agent.handleFilePutStart,
 		FilePutChunk:    agent.handleFilePutChunk,
 		FilePutFinish:   agent.handleFilePutFinish,
 		FileDelete:      agent.handleFileDelete,
 		FileChmod:       agent.handleFileChmod,
+		FileMkdir:       agent.handleFileMkdir,
+		FileRename:      agent.handleFileRename,
 		KioskSet:        agent.handleKioskSet,
 		KioskSaveLayout: agent.handleKioskSaveLayout,
 		KioskGetLayouts: agent.handleKioskGetLayouts,
@@ -226,6 +230,21 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 			log.Error("direct mode enabled but misconfigured; not starting", "error", err)
 		} else {
 			agent.direct = ds
+			// Advertise the direct endpoint in telemetry so the IDE can attempt a
+			// P2P connection (control plane copies it into client_list).
+			pub.DirectAdvert = func() *telemetry.DirectAdvert {
+				adv, err := ds.Advert()
+				if err != nil {
+					log.Debug("direct advert unavailable", "error", err)
+					return nil
+				}
+				return &telemetry.DirectAdvert{
+					Addr:        adv.Addr,
+					CertSha256:  adv.CertSha256,
+					PinRequired: adv.PinRequired,
+					Scheme:      adv.Scheme,
+				}
+			}
 		}
 	}
 
@@ -701,6 +720,81 @@ func toTransportDirEntries(in []dirbrowse.Entry) []transport.DirListEntry {
 	return out
 }
 
+// --- Git status handler ---
+
+// handleGitStatusRequest reports the git branch + dirty-file count of a working
+// directory. Read-only probe: runs git directly (not via the operator command
+// runner) confined to a validated absolute path with a short timeout.
+func (a *Agent) handleGitStatusRequest(msg transport.GitStatusRequest) {
+	resp := transport.GitStatusResponse{
+		ClientID:  a.cfg.ClientID,
+		RequestID: msg.RequestID,
+		Path:      msg.Path,
+	}
+	fail := func(reason string) {
+		resp.OK = false
+		resp.Error = reason
+		if err := a.transport.Emit("git_status_response", resp); err != nil {
+			a.log.Error("failed to emit git_status_response", "requestId", msg.RequestID, "error", err)
+		}
+	}
+
+	dir, err := fileops.ValidatePath(msg.Path)
+	if err != nil {
+		fail(err.Error())
+		return
+	}
+	if info, err := os.Stat(dir); err != nil {
+		fail(err.Error())
+		return
+	} else if !info.IsDir() {
+		fail("path is not a directory")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(a.ctxOrBackground(), 5*time.Second)
+	defer cancel()
+
+	branch, err := runGit(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		fail("not a git repository")
+		return
+	}
+	status, err := runGit(ctx, dir, "status", "--porcelain")
+	if err != nil {
+		fail(err.Error())
+		return
+	}
+
+	resp.OK = true
+	resp.Branch = strings.TrimSpace(branch)
+	resp.Dirty = countNonEmptyLines(status)
+	if err := a.transport.Emit("git_status_response", resp); err != nil {
+		a.log.Error("failed to emit git_status_response", "requestId", msg.RequestID, "error", err)
+	}
+}
+
+// runGit runs `git -C <dir> <args...>` with locks disabled (read-only safety).
+func runGit(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+func countNonEmptyLines(s string) int {
+	n := 0
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
+}
+
 // --- File operation handlers ---
 
 // Read streaming tunables. The chunk size stays well under the 1 MB frame
@@ -883,6 +977,46 @@ func (a *Agent) handleFileChmod(msg transport.FileChmodRequest) {
 
 	if err := a.transport.Emit("file_chmod_result", result); err != nil {
 		a.log.Error("failed to emit file_chmod_result", "requestId", msg.RequestID, "error", err)
+	}
+}
+
+func (a *Agent) handleFileMkdir(msg transport.FileMkdirRequest) {
+	result := transport.FileMkdirResult{
+		ClientID:  a.cfg.ClientID,
+		RequestID: msg.RequestID,
+	}
+	path, err := fileops.Mkdir(msg.Path, msg.Force)
+	if err != nil {
+		result.OK = false
+		result.Error = err.Error()
+		a.log.Warn("file_mkdir failed", "requestId", msg.RequestID, "path", msg.Path, "error", err)
+	} else {
+		result.OK = true
+		result.Path = path
+		a.log.Info("file_mkdir completed", "requestId", msg.RequestID, "path", path)
+	}
+	if err := a.transport.Emit("file_mkdir_result", result); err != nil {
+		a.log.Error("failed to emit file_mkdir_result", "requestId", msg.RequestID, "error", err)
+	}
+}
+
+func (a *Agent) handleFileRename(msg transport.FileRenameRequest) {
+	result := transport.FileRenameResult{
+		ClientID:  a.cfg.ClientID,
+		RequestID: msg.RequestID,
+	}
+	dst, err := fileops.Rename(msg.Path, msg.NewPath, msg.Force)
+	if err != nil {
+		result.OK = false
+		result.Error = err.Error()
+		a.log.Warn("file_rename failed", "requestId", msg.RequestID, "path", msg.Path, "newPath", msg.NewPath, "error", err)
+	} else {
+		result.OK = true
+		result.Path = dst
+		a.log.Info("file_rename completed", "requestId", msg.RequestID, "path", msg.Path, "newPath", dst)
+	}
+	if err := a.transport.Emit("file_rename_result", result); err != nil {
+		a.log.Error("failed to emit file_rename_result", "requestId", msg.RequestID, "error", err)
 	}
 }
 
