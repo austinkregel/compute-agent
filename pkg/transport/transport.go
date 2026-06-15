@@ -500,6 +500,11 @@ type Client struct {
 	connMu sync.RWMutex
 	conn   *websocket.Conn
 
+	// writeMu serializes WebSocket writes. Emit is called from the read-loop
+	// dispatch, the telemetry ticker, shell-output callbacks, and async command
+	// handlers; the underlying conn permits only one writer at a time.
+	writeMu sync.Mutex
+
 	// lastTraffic stores the unix nano timestamp of the last inbound/outbound
 	// control-plane traffic. A value of 0 means "not connected / unknown".
 	lastTraffic atomic.Int64
@@ -610,7 +615,10 @@ func (c *Client) Emit(event string, payload any) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := conn.Write(ctx, websocket.MessageText, out); err != nil {
+	c.writeMu.Lock()
+	err = conn.Write(ctx, websocket.MessageText, out)
+	c.writeMu.Unlock()
+	if err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
 	c.touchTraffic()
@@ -844,7 +852,8 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			return
 		}
 		if c.handlers.AdminRun != nil {
-			c.handlers.AdminRun(msg)
+			// Off the read loop (same rationale as exec_request).
+			go c.handlers.AdminRun(msg)
 		}
 
 	case "shell_start":
@@ -984,7 +993,10 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			return
 		}
 		if c.handlers.Exec != nil {
-			c.handlers.Exec(msg)
+			// Off the read loop: an exec (e.g. a multi-minute `rebase-indexer
+			// index`) must not block ping/pong or other messages. The admin
+			// runner's own concurrency limit serializes the work.
+			go c.handlers.Exec(msg)
 		}
 
 	case "exec_allowlist":
