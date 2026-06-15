@@ -106,6 +106,13 @@ type Handlers struct {
 	NotifySubscribers func(NotifySubscribers)
 }
 
+// NotifySubscribers carries the count of dashboards currently subscribed to an
+// agent, so it can gate desktop-notification forwarding (skip work when nobody's
+// listening).
+type NotifySubscribers struct {
+	Count int `json:"count"`
+}
+
 // AdminCommand mirrors the payload emitted by the control plane.
 type AdminCommand struct {
 	Token string      `json:"token"`
