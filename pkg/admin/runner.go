@@ -174,8 +174,8 @@ func (r *Runner) RunCommand(ctx context.Context, req CommandRequest) CommandResu
 
 	if !r.isAllowed(cmdTokens) {
 		return CommandResult{
-			Error:  "command not allowed",
-			Stderr: "command blocked by allowlist",
+			Error:  fmt.Sprintf("command not allowed: %s", req.Command),
+			Stderr: fmt.Sprintf("command blocked by allowlist: %s", req.Command),
 			Summary: CommandSummary{
 				Code: 126,
 			},
@@ -296,7 +296,7 @@ func (r *Runner) Exec(ctx context.Context, command, cwd string, timeout time.Dur
 		return CommandResult{Error: fmt.Sprintf("invalid command: %v", err), Stderr: "command blocked: invalid command", Summary: CommandSummary{Code: 126}}
 	}
 	if !r.isAllowed(tokens) {
-		return CommandResult{Error: "command not allowed", Stderr: "command blocked by allowlist", Summary: CommandSummary{Code: 126}}
+		return CommandResult{Error: fmt.Sprintf("command not allowed: %s", command), Stderr: fmt.Sprintf("command blocked by allowlist: %s", command), Summary: CommandSummary{Code: 126}}
 	}
 
 	if timeout <= 0 {
@@ -361,8 +361,8 @@ func (r *Runner) runCrontabApply(ctx context.Context, req CommandRequest, cronTe
 	// Enforce allowlist policy (mirrors required command-allow behavior).
 	if !r.isAllowed([]string{"crontab", "-"}) {
 		return CommandResult{
-			Error:  "command not allowed",
-			Stderr: "command blocked by allowlist",
+			Error:  "command not allowed: crontab -",
+			Stderr: "command blocked by allowlist: crontab -",
 			Summary: CommandSummary{
 				Code: 126,
 			},
