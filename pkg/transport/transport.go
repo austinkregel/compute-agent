@@ -1016,7 +1016,11 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			return
 		}
 		if c.handlers.FileGet != nil {
-			c.handlers.FileGet(msg)
+			// Off the read loop: streaming a large file (e.g. a packed index
+			// archive) chunk-by-chunk must not block ping/pong, or the control
+			// plane drops the agent mid-transfer. Chunks carry requestId, so
+			// concurrent downloads stay correlated.
+			go c.handlers.FileGet(msg)
 		}
 
 	case "file_put_start":
