@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -196,6 +197,9 @@ func (p *Publisher) emitSample() {
 	}
 
 	// Host info - get hostname, platform, release, arch
+	if home, err := os.UserHomeDir(); err == nil {
+		sample.Home = home
+	}
 	if hi, err := host.Info(); err == nil {
 		sample.UptimeSec = hi.Uptime
 		sample.Hostname = hi.Hostname
@@ -572,6 +576,7 @@ type StatsSample struct {
 	Platform            string                   `json:"platform,omitempty"`
 	Release             string                   `json:"release,omitempty"`
 	Arch                string                   `json:"arch,omitempty"`
+	Home                string                   `json:"home,omitempty"` // agent user's home dir (for tool caches)
 	CPUs                int                      `json:"cpus,omitempty"`
 	UptimeSec           uint64                   `json:"uptimeSec,omitempty"`
 	Battery             *BatteryInfo             `json:"battery,omitempty"`

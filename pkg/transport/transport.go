@@ -505,6 +505,10 @@ type Client struct {
 	// handlers; the underlying conn permits only one writer at a time.
 	writeMu sync.Mutex
 
+	// fileGetSem bounds concurrent file_get handlers (each can buffer a sizable
+	// file), so a flood of requests can't exhaust agent memory/FDs.
+	fileGetSem chan struct{}
+
 	// lastTraffic stores the unix nano timestamp of the last inbound/outbound
 	// control-plane traffic. A value of 0 means "not connected / unknown".
 	lastTraffic atomic.Int64
@@ -548,9 +552,10 @@ func New(cfg Config, log *logging.Logger, handlers Handlers) (*Client, error) {
 	}
 
 	return &Client{
-		cfg:      cfg,
-		log:      log,
-		handlers: handlers,
+		cfg:        cfg,
+		log:        log,
+		handlers:   handlers,
+		fileGetSem: make(chan struct{}, 8),
 	}, nil
 }
 
@@ -1019,8 +1024,17 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			// Off the read loop: streaming a large file (e.g. a packed index
 			// archive) chunk-by-chunk must not block ping/pong, or the control
 			// plane drops the agent mid-transfer. Chunks carry requestId, so
-			// concurrent downloads stay correlated.
-			go c.handlers.FileGet(msg)
+			// concurrent downloads stay correlated. Bounded by fileGetSem so a
+			// flood can't exhaust memory/FDs.
+			go func() {
+				// fileGetSem is nil when a Client is built without New() (tests);
+				// only gate when it's configured.
+				if c.fileGetSem != nil {
+					c.fileGetSem <- struct{}{}
+					defer func() { <-c.fileGetSem }()
+				}
+				c.handlers.FileGet(msg)
+			}()
 		}
 
 	case "file_put_start":
