@@ -176,10 +176,27 @@ type ConnectivityConfig struct {
 	TCPTestPort int    `json:"tcpTestPort"`
 }
 
+// Allowlist trust models for AdminConfig.AllowlistMode.
+const (
+	// AllowlistModeMerge (default) unions the control-plane allowlist with the
+	// agent's local allowedCommands — local entries are always honored and the
+	// CP can only add. This keeps a local floor the CP can't shrink.
+	AllowlistModeMerge = "merge"
+	// AllowlistModeCPAuthoritative makes the control-plane allowlist the sole
+	// source of truth: a push replaces the local list entirely, so a locked-down
+	// fleet can centrally tighten an over-permissive local config.
+	AllowlistModeCPAuthoritative = "cp-authoritative"
+)
+
 // AdminConfig validates remote command guardrails.
 type AdminConfig struct {
 	EnableShell bool     `json:"enableShell"`
 	Allowed     []string `json:"allowedCommands"`
+
+	// AllowlistMode controls how a pushed control-plane allowlist combines with
+	// Allowed: "merge" (default) unions them; "cp-authoritative" replaces the
+	// local list with the CP's. Empty is treated as "merge".
+	AllowlistMode string `json:"allowlistMode"`
 
 	// AllowedCwds restricts server-provided working directories for admin_run.
 	// If empty, any request specifying a Cwd will be rejected.

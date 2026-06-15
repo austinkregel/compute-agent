@@ -764,16 +764,30 @@ func (a *Agent) handleExecRequest(msg transport.ExecRequest) {
 }
 
 // handleExecAllowlist applies a command allowlist pushed by the control plane.
-// The CP list *extends* — it does not replace — the agent's local
-// admin.allowedCommands, so an operator's locally-configured allowlist is always
-// honored (the CP can add entries, but can't silently drop local ones on connect).
+// The combination is governed by admin.allowlistMode:
+//   - "merge" (default): the CP list *extends* the agent's local
+//     admin.allowedCommands — the operator's local allowlist is always honored
+//     and the CP can only add (it can't silently drop local entries).
+//   - "cp-authoritative": the CP list *replaces* the local one, letting a
+//     locked-down fleet centrally tighten an over-permissive local config.
 func (a *Agent) handleExecAllowlist(msg transport.ExecAllowlist) {
-	merged := make([]string, 0, len(a.cfg.Admin.Allowed)+len(msg.Commands))
-	merged = append(merged, a.cfg.Admin.Allowed...)
-	merged = append(merged, msg.Commands...)
-	a.admin.SetAllowlist(merged)
+	mode, effective := combineAllowlist(a.cfg.Admin.AllowlistMode, a.cfg.Admin.Allowed, msg.Commands)
+	a.admin.SetAllowlist(effective)
 	a.log.Info("exec allowlist updated",
-		"total", len(merged), "local", len(a.cfg.Admin.Allowed), "controlPlane", len(msg.Commands))
+		"mode", mode, "total", len(effective), "local", len(a.cfg.Admin.Allowed), "controlPlane", len(msg.Commands))
+}
+
+// combineAllowlist computes the effective allowlist from the configured trust
+// model. cp-authoritative uses the control-plane list verbatim; anything else
+// (including empty) merges local + CP. Returns the resolved mode for logging.
+func combineAllowlist(mode string, local, cp []string) (string, []string) {
+	if mode == config.AllowlistModeCPAuthoritative {
+		return config.AllowlistModeCPAuthoritative, cp
+	}
+	merged := make([]string, 0, len(local)+len(cp))
+	merged = append(merged, local...)
+	merged = append(merged, cp...)
+	return config.AllowlistModeMerge, merged
 }
 
 // --- File operation handlers ---
