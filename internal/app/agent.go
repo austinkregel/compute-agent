@@ -764,9 +764,16 @@ func (a *Agent) handleExecRequest(msg transport.ExecRequest) {
 }
 
 // handleExecAllowlist applies a command allowlist pushed by the control plane.
+// The CP list *extends* — it does not replace — the agent's local
+// admin.allowedCommands, so an operator's locally-configured allowlist is always
+// honored (the CP can add entries, but can't silently drop local ones on connect).
 func (a *Agent) handleExecAllowlist(msg transport.ExecAllowlist) {
-	a.admin.SetAllowlist(msg.Commands)
-	a.log.Info("exec allowlist updated", "count", len(msg.Commands))
+	merged := make([]string, 0, len(a.cfg.Admin.Allowed)+len(msg.Commands))
+	merged = append(merged, a.cfg.Admin.Allowed...)
+	merged = append(merged, msg.Commands...)
+	a.admin.SetAllowlist(merged)
+	a.log.Info("exec allowlist updated",
+		"total", len(merged), "local", len(a.cfg.Admin.Allowed), "controlPlane", len(msg.Commands))
 }
 
 // --- File operation handlers ---
