@@ -1146,10 +1146,23 @@ func TestDispatchSignedCommand_AllEvents(t *testing.T) {
 			payload, _ := json.Marshal(map[string]any{})
 			client.dispatchSignedCommand(event, payload)
 
-			mu.Lock()
-			defer mu.Unlock()
-			if !called {
-				t.Errorf("handler for %q was not called", event)
+			// exec_request/admin_run dispatch on a goroutine (so a long exec
+			// can't block the read loop), so poll briefly for the call instead
+			// of asserting immediately. Synchronous handlers pass on the first
+			// iteration.
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				mu.Lock()
+				done := called
+				mu.Unlock()
+				if done {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Errorf("handler for %q was not called", event)
+					break
+				}
+				time.Sleep(time.Millisecond)
 			}
 		})
 	}
