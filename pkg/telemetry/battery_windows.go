@@ -12,6 +12,10 @@ import (
 // batteryDebugLog is a debug logger function for battery discovery. Not used on Windows (uses WMI).
 var batteryDebugLog func(msg string)
 
+// batterySupported is true on platforms with a real battery telemetry
+// implementation. See battery_linux.go.
+const batterySupported = true
+
 // Minimal WMI model for Win32_Battery.
 type win32Battery struct {
 	DeviceID                 string

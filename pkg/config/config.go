@@ -36,6 +36,7 @@ type Config struct {
 	Variant        VariantConfig      `json:"variant"`
 	Docker         DockerConfig       `json:"docker"`
 	DirectMode     DirectModeConfig   `json:"directMode"`
+	Telephony      TelephonyConfig    `json:"telephony"`
 }
 
 // DirectModeConfig configures the optional inbound listener that lets a trusted
@@ -96,6 +97,22 @@ type DirectOIDCConfig struct {
 type DockerConfig struct {
 	Enabled    bool   `json:"enabled"`
 	SocketPath string `json:"socketPath,omitempty"`
+}
+
+// TelephonyConfig configures the bridge to the Android companion app (see
+// app/README.md) for phone-class agents. Disabled by default — this only
+// makes sense on a device running the companion app alongside the agent.
+type TelephonyConfig struct {
+	// Enabled connects to the companion app's local IPC endpoint at startup.
+	Enabled bool `json:"enabled"`
+	// CompanionAddr is the companion app's loopback address. Default
+	// "127.0.0.1:47800" (see CompanionService.PORT in the Android app).
+	CompanionAddr string `json:"companionAddr"`
+	// CompanionToken is the pairing token shown in the companion app's UI on
+	// first launch — a shared secret for the loopback connection, not a
+	// network-facing credential (defense in depth against another app on the
+	// device connecting to the socket).
+	CompanionToken string `json:"companionToken"`
 }
 
 // KioskConfig controls the optional kiosk mode (fullscreen WebView display).
@@ -359,6 +376,9 @@ func defaultConfig() Config {
 		},
 		Docker: DockerConfig{
 			Enabled: true,
+		},
+		Telephony: TelephonyConfig{
+			CompanionAddr: "127.0.0.1:47800",
 		},
 	}
 }

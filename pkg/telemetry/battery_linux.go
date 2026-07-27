@@ -16,6 +16,12 @@ import (
 // The function takes a formatted message string (already formatted with fmt.Sprintf).
 var batteryDebugLog func(msg string)
 
+// batterySupported is true on platforms with a real battery telemetry
+// implementation (as opposed to battery_other.go's always-nil stub). Backs
+// BatterySupported(), which the batteryCap capability adapter uses to
+// distinguish "unsupported platform" from "supported but no battery present".
+const batterySupported = true
+
 // isBatteryDevice checks if a power_supply device is a battery based on type file and device name.
 // This supports various Linux battery drivers including:
 // - Standard ACPI batteries (BAT0, BAT1, etc.)

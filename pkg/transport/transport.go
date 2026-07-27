@@ -105,6 +105,12 @@ type Handlers struct {
 	// NotifySubscribers reports how many dashboards are currently connected, so
 	// the agent can gate desktop-notification forwarding.
 	NotifySubscribers func(NotifySubscribers)
+
+	// Telephony handlers (phone-class agents only, gated by the "telephony"
+	// capability — see commandCapability). Bridge to the Android companion app.
+	SMSSend            func(SMSSendRequest)
+	SMSThreadRequest   func(SMSThreadRequest)
+	SMSMessagesRequest func(SMSMessagesRequest)
 }
 
 // NotifySubscribers carries the count of dashboards currently subscribed to an
@@ -526,6 +532,32 @@ type Client struct {
 	// Command signature verification (per-session)
 	verifierMu sync.RWMutex
 	verifier   *cmdsig.Verifier
+
+	// CapabilityGate, when set, reports whether the agent currently has the
+	// named capability enabled (see pkg/capability.Registry.Has). Wired by
+	// agent.New. dispatchSignedCommand consults commandCapability to find
+	// capability-scoped events and refuses them when this returns false (or
+	// is nil) — a fail-closed gate so a compromised/buggy control plane can
+	// never make an agent execute a command class it never declared support
+	// for (e.g. sms_send on a desktop agent with no telephony companion).
+	CapabilityGate func(name string) bool
+}
+
+// commandCapability maps capability-scoped signed-command event names to the
+// capability name (see pkg/capability) required to execute them. Events not
+// listed here are unscoped and dispatch unconditionally (once signature
+// verification passes), matching today's behavior. Telephony entries are
+// reserved ahead of the feature landing — inert until dispatchSignedCommand
+// grows the matching cases, and safe to ship now since an unrecognized event
+// name is a no-op regardless of this table.
+var commandCapability = map[string]string{
+	"sms_send":             "telephony",
+	"sms_thread_request":   "telephony",
+	"sms_messages_request": "telephony",
+	"call_control":         "telephony",
+	"call_dial":            "telephony",
+	"call_bridge_offer":    "telephony",
+	"call_bridge_ice":      "telephony",
 }
 
 // New builds a transport client with default backoff settings.
@@ -858,6 +890,17 @@ func (c *Client) verifyCommand(envelope *cmdsig.SignedEnvelope) error {
 
 // dispatchSignedCommand routes a verified command payload to the appropriate handler.
 func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
+	if reqCap, scoped := commandCapability[event]; scoped {
+		if c.CapabilityGate == nil || !c.CapabilityGate(reqCap) {
+			c.log.Warn("refusing capability-scoped command", "event", event, "capability", reqCap)
+			_ = c.Emit("command_rejected", map[string]any{
+				"event": event,
+				"error": "capability_unavailable",
+			})
+			return
+		}
+	}
+
 	switch event {
 	case "admin_run":
 		var msg AdminCommand
@@ -1295,6 +1338,36 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 		}
 		if c.handlers.ContainerLogs != nil {
 			c.handlers.ContainerLogs(msg)
+		}
+
+	case "sms_send":
+		var msg SMSSendRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal sms_send", "error", err)
+			return
+		}
+		if c.handlers.SMSSend != nil {
+			c.handlers.SMSSend(msg)
+		}
+
+	case "sms_thread_request":
+		var msg SMSThreadRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal sms_thread_request", "error", err)
+			return
+		}
+		if c.handlers.SMSThreadRequest != nil {
+			c.handlers.SMSThreadRequest(msg)
+		}
+
+	case "sms_messages_request":
+		var msg SMSMessagesRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("unmarshal sms_messages_request", "error", err)
+			return
+		}
+		if c.handlers.SMSMessagesRequest != nil {
+			c.handlers.SMSMessagesRequest(msg)
 		}
 
 	default:

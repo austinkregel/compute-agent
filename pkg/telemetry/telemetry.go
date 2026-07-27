@@ -19,6 +19,7 @@ import (
 	"github.com/shirou/gopsutil/v3/mem"
 	gopsutilnet "github.com/shirou/gopsutil/v3/net"
 
+	"github.com/austinkregel/compute-agent/pkg/capability"
 	"github.com/austinkregel/compute-agent/pkg/config"
 	"github.com/austinkregel/compute-agent/pkg/docker"
 	"github.com/austinkregel/compute-agent/pkg/logging"
@@ -55,6 +56,11 @@ type Publisher struct {
 	// to embed in each stats sample. Wired by agent.New only when direct mode is
 	// active; nil otherwise (the `direct` field is omitted → backward compatible).
 	DirectAdvert func() *DirectAdvert
+
+	// Capabilities, when set, returns the current capability-registry snapshot
+	// to embed in each stats sample. Wired by agent.New; nil means no registry
+	// is in use (the `capabilities` field is omitted → backward compatible).
+	Capabilities func() map[string]capability.Info
 
 	warnMu          sync.Mutex
 	lastBatteryWarn time.Time
@@ -115,6 +121,38 @@ func (p *Publisher) DockerClient() *docker.Client {
 		return nil
 	}
 	return p.dockerClient
+}
+
+// BatterySupported reports whether this platform has a battery telemetry
+// implementation at all (Linux/Windows), independent of whether a physical
+// battery is actually present on this host. See battery_linux.go /
+// battery_windows.go / battery_other.go.
+func BatterySupported() bool { return batterySupported }
+
+// CollectBattery runs the platform battery probe once, bypassing the
+// Publisher's periodic collection loop. Used by the batteryCap capability
+// adapter to answer "is a battery present right now" on demand.
+func CollectBattery() (*BatteryInfo, error) { return getBatteryInfo() }
+
+// CollectThermalSample is a lightweight, single-shot thermal probe using only
+// gopsutil's cross-platform sensor read. It intentionally does not replicate
+// the Windows OpenHardwareMonitor, Linux sysfs, or GPU-CLI fallback chains
+// emitSample applies on the full telemetry tick — it exists to cheaply answer
+// "are any thermal sensors visible on this host" for the thermalCap
+// capability adapter, not to be a complete substitute for emitSample's
+// collection.
+func CollectThermalSample() ([]ThermalSensor, error) {
+	temps, err := hostSensorsTemperatures()
+	if err != nil && len(temps) == 0 {
+		return nil, err
+	}
+	var out []ThermalSensor
+	for _, t := range temps {
+		if norm, ok := normalizeThermal(t); ok {
+			out = append(out, norm)
+		}
+	}
+	return out, nil
 }
 
 // Run blocks, emitting stats until context cancellation.
@@ -424,6 +462,15 @@ func (p *Publisher) emitSample() {
 		}
 	}
 
+	// Capability-registry snapshot (only when a registry is wired in
+	// agent.New). Surfaced generically to the control plane so new
+	// capabilities never require server-side schema changes.
+	if p.Capabilities != nil {
+		if caps := p.Capabilities(); len(caps) > 0 {
+			sample.Capabilities = caps
+		}
+	}
+
 	if err := p.emitter.Emit("stats", map[string]any{"data": sample}); err != nil {
 		p.log.Debug("skipping stats emit (transport offline)", "error", err)
 	}
@@ -566,31 +613,32 @@ func (p *Publisher) rateLimitedWarn(last *time.Time, every time.Duration, msg st
 
 // StatsSample defines the schema sent to the control plane.
 type StatsSample struct {
-	AgentVersion        string                   `json:"agentVersion,omitempty"`
-	CPUPercent          float64                  `json:"cpu"`
-	Mem                 *MemInfo                 `json:"mem,omitempty"` // UI expects mem object, not memPercent
-	Load                LoadAvg                  `json:"load"`
-	Disk                []DiskInfo               `json:"disk,omitempty"`
-	NetIfaces           []NetInterface           `json:"netIfaces,omitempty"`
-	Hostname            string                   `json:"hostname,omitempty"`
-	Platform            string                   `json:"platform,omitempty"`
-	Release             string                   `json:"release,omitempty"`
-	Arch                string                   `json:"arch,omitempty"`
-	Home                string                   `json:"home,omitempty"` // agent user's home dir (for tool caches)
-	CPUs                int                      `json:"cpus,omitempty"`
-	UptimeSec           uint64                   `json:"uptimeSec,omitempty"`
-	Battery             *BatteryInfo             `json:"battery,omitempty"`
-	Thermal             []ThermalSensor          `json:"thermal,omitempty"`
-	Updates             *UpdateInfo              `json:"updates,omitempty"`
-	LastReboot          string                   `json:"lastReboot,omitempty"` // RFC3339 timestamp (UTC)
-	KernelVersion       string                   `json:"kernelVersion,omitempty"`
-	SecurityPatchStatus string                   `json:"securityPatchStatus,omitempty"`
-	ServiceHealth       *ServiceHealth           `json:"serviceHealth,omitempty"`
-	TimeSyncStatus      string                   `json:"timeSyncStatus,omitempty"`
-	Alerts              *sysalerts.AlertSnapshot `json:"alerts,omitempty"`
-	Docker              *docker.DockerStatus     `json:"docker,omitempty"`
-	Direct              *DirectAdvert            `json:"direct,omitempty"`
-	Timestamp           string                   `json:"ts"`
+	AgentVersion        string                     `json:"agentVersion,omitempty"`
+	CPUPercent          float64                    `json:"cpu"`
+	Mem                 *MemInfo                   `json:"mem,omitempty"` // UI expects mem object, not memPercent
+	Load                LoadAvg                    `json:"load"`
+	Disk                []DiskInfo                 `json:"disk,omitempty"`
+	NetIfaces           []NetInterface             `json:"netIfaces,omitempty"`
+	Hostname            string                     `json:"hostname,omitempty"`
+	Platform            string                     `json:"platform,omitempty"`
+	Release             string                     `json:"release,omitempty"`
+	Arch                string                     `json:"arch,omitempty"`
+	Home                string                     `json:"home,omitempty"` // agent user's home dir (for tool caches)
+	CPUs                int                        `json:"cpus,omitempty"`
+	UptimeSec           uint64                     `json:"uptimeSec,omitempty"`
+	Battery             *BatteryInfo               `json:"battery,omitempty"`
+	Thermal             []ThermalSensor            `json:"thermal,omitempty"`
+	Updates             *UpdateInfo                `json:"updates,omitempty"`
+	LastReboot          string                     `json:"lastReboot,omitempty"` // RFC3339 timestamp (UTC)
+	KernelVersion       string                     `json:"kernelVersion,omitempty"`
+	SecurityPatchStatus string                     `json:"securityPatchStatus,omitempty"`
+	ServiceHealth       *ServiceHealth             `json:"serviceHealth,omitempty"`
+	TimeSyncStatus      string                     `json:"timeSyncStatus,omitempty"`
+	Alerts              *sysalerts.AlertSnapshot   `json:"alerts,omitempty"`
+	Docker              *docker.DockerStatus       `json:"docker,omitempty"`
+	Direct              *DirectAdvert              `json:"direct,omitempty"`
+	Capabilities        map[string]capability.Info `json:"capabilities,omitempty"`
+	Timestamp           string                     `json:"ts"`
 }
 
 // DirectAdvert advertises how the IDE can reach this agent directly (P2P). The

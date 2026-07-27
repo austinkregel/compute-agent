@@ -20,12 +20,14 @@ import (
 	"github.com/austinkregel/compute-agent/internal/kiosk"
 	"github.com/austinkregel/compute-agent/pkg/admin"
 	"github.com/austinkregel/compute-agent/pkg/backup"
+	"github.com/austinkregel/compute-agent/pkg/capability"
 	"github.com/austinkregel/compute-agent/pkg/config"
 	"github.com/austinkregel/compute-agent/pkg/dirbrowse"
 	"github.com/austinkregel/compute-agent/pkg/docker"
 	"github.com/austinkregel/compute-agent/pkg/fileops"
 	"github.com/austinkregel/compute-agent/pkg/logging"
 	"github.com/austinkregel/compute-agent/pkg/telemetry"
+	"github.com/austinkregel/compute-agent/pkg/telephony"
 	"github.com/austinkregel/compute-agent/pkg/transport"
 	"github.com/austinkregel/compute-agent/pkg/version"
 )
@@ -81,6 +83,8 @@ type Agent struct {
 	uploads   *fileops.UploadManager
 	kiosk     kiosk.Manager
 	direct    *directserver.Server
+	caps      *capability.Registry
+	telephony *telephony.Manager
 
 	ctx context.Context
 
@@ -101,6 +105,7 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		logTail:     map[string]*tailHandle{},
 		uploads:     fileops.NewUploadManager(),
 		execCancels: map[string]context.CancelFunc{},
+		caps:        capability.New(),
 	}
 
 	// Best-effort cleanup of old Windows executables left after an update.
@@ -165,6 +170,10 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		ComposeScan:        agent.handleComposeScan,
 		ComposeParse:       agent.handleComposeParse,
 		ContainerLogs:      agent.handleContainerLogs,
+
+		SMSSend:            agent.handleSMSSend,
+		SMSThreadRequest:   agent.handleSMSThreadRequest,
+		SMSMessagesRequest: agent.handleSMSMessagesRequest,
 	}
 
 	t, err := transport.New(transport.Config{
@@ -183,13 +192,15 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("transport: %w", err)
 	}
+	t.CapabilityGate = agent.caps.Has
 
 	backupCoord := backup.NewCoordinator(cfg, log.With("component", "backup"), t)
 	pub := telemetry.NewPublisher(cfg, log.With("component", "telemetry"), t)
 
 	// Wire Docker client if enabled
+	var dc *docker.Client
 	if cfg.Docker.Enabled {
-		dc := docker.NewClient(cfg.Docker.SocketPath)
+		dc = docker.NewClient(cfg.Docker.SocketPath)
 		if dc != nil {
 			log.Info("docker integration enabled", "available", dc.Available())
 			pub.SetDockerClient(dc)
@@ -197,6 +208,22 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 			log.Info("docker integration enabled but daemon unavailable; degrading gracefully")
 		}
 	}
+	agent.caps.Register(dockerCap{enabled: cfg.Docker.Enabled, client: dc})
+	agent.caps.Register(batteryCap{})
+	agent.caps.Register(thermalCap{})
+
+	// Wire the Android companion app bridge if enabled (phone-class agents only).
+	if cfg.Telephony.Enabled {
+		agent.telephony = telephony.NewManager(
+			telephony.Config{
+				CompanionAddr:  cfg.Telephony.CompanionAddr,
+				CompanionToken: cfg.Telephony.CompanionToken,
+			},
+			log.With("component", "telephony"),
+			t.Emit,
+		)
+	}
+	agent.caps.Register(telephonyCap{enabled: cfg.Telephony.Enabled, mgr: agent.telephony})
 
 	agent.transport = t
 	agent.telemetry = pub
@@ -222,6 +249,8 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		}
 	}
 
+	agent.caps.Register(kioskCap{mgr: agent.kiosk})
+
 	// Wire telemetry stats to kiosk dashboard view
 	if agent.kiosk != nil {
 		pub.OnSample = func(raw []byte) {
@@ -231,10 +260,12 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 
 	// Optional inbound listener for direct IDE connections. Misconfiguration is
 	// non-fatal: log and leave it disabled so the control-plane path still runs.
+	var directStartErr error
 	if cfg.DirectMode.Enabled {
 		ds, err := directserver.New(cfg, log.With("component", "directmode"))
 		if err != nil {
 			log.Error("direct mode enabled but misconfigured; not starting", "error", err)
+			directStartErr = err
 		} else {
 			agent.direct = ds
 			// Advertise the direct endpoint in telemetry so the IDE can attempt a
@@ -253,6 +284,19 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 				}
 			}
 		}
+	}
+	agent.caps.Register(directCap{enabled: cfg.DirectMode.Enabled, server: agent.direct, startErr: directStartErr})
+
+	// Initial capability probe so the first stats tick already reflects host
+	// state, then wire the ongoing hook telemetry calls each tick.
+	probeCtx, cancelProbe := context.WithTimeout(context.Background(), 10*time.Second)
+	agent.caps.ProbeAll(probeCtx)
+	cancelProbe()
+	pub.Capabilities = func() map[string]capability.Info {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		agent.caps.RefreshDynamic(ctx)
+		return agent.caps.Snapshot()
 	}
 
 	return agent, nil
@@ -287,6 +331,17 @@ func (a *Agent) Run(ctx context.Context) error {
 			if err := a.kiosk.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				a.log.Error("kiosk subsystem error", "error", err)
 				errCh <- err
+			}
+		}()
+	}
+
+	// Companion app connection is best-effort: a lost/never-established
+	// connection degrades the "telephony" capability, it never brings down
+	// the agent (matches direct-mode/kiosk's non-fatal convention).
+	if a.telephony != nil {
+		go func() {
+			if err := a.telephony.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				a.log.Debug("telephony companion connection ended", "error", err)
 			}
 		}()
 	}

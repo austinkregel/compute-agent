@@ -240,16 +240,16 @@ func TestRegisterEventHandlers(t *testing.T) {
 	}
 
 	handlers := Handlers{
-		Hello:         func() {},
-		AdminRun:      func(AdminCommand) {},
-		ShellStart:    func(ShellStart) {},
-		ShellInput:    func(ShellInput) {},
-		ShellResize:   func(ShellResize) {},
-		ShellClose:    func(ShellClose) {},
-		BackupPlan:    func(BackupRequest) {},
-		BackupStart:   func(BackupRequest) {},
-		SyncKeys:      func(SyncKeysRequest) {},
-		UpdateAgent:   func(UpdateAgentRequest) {},
+		Hello:       func() {},
+		AdminRun:    func(AdminCommand) {},
+		ShellStart:  func(ShellStart) {},
+		ShellInput:  func(ShellInput) {},
+		ShellResize: func(ShellResize) {},
+		ShellClose:  func(ShellClose) {},
+		BackupPlan:  func(BackupRequest) {},
+		BackupStart: func(BackupRequest) {},
+		SyncKeys:    func(SyncKeysRequest) {},
+		UpdateAgent: func(UpdateAgentRequest) {},
 	}
 
 	client, err := New(cfg, nil, handlers)
@@ -1072,6 +1072,7 @@ func TestDispatchSignedCommand_AllEvents(t *testing.T) {
 		"file_delete_request", "file_chmod_request",
 		"file_mkdir_request", "file_rename_request",
 		"kiosk_set",
+		"sms_send", "sms_thread_request", "sms_messages_request",
 	}
 
 	for _, event := range events {
@@ -1131,6 +1132,12 @@ func TestDispatchSignedCommand_AllEvents(t *testing.T) {
 				handlers.FileRename = func(FileRenameRequest) { mu.Lock(); called = true; mu.Unlock() }
 			case "kiosk_set":
 				handlers.KioskSet = func(KioskSetRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "sms_send":
+				handlers.SMSSend = func(SMSSendRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "sms_thread_request":
+				handlers.SMSThreadRequest = func(SMSThreadRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "sms_messages_request":
+				handlers.SMSMessagesRequest = func(SMSMessagesRequest) { mu.Lock(); called = true; mu.Unlock() }
 			}
 
 			client := &Client{
@@ -1140,6 +1147,10 @@ func TestDispatchSignedCommand_AllEvents(t *testing.T) {
 					AuthToken: "token",
 				},
 				handlers: handlers,
+				// sms_*/telephony events are capability-gated (see
+				// commandCapability); allow them through so this table test
+				// still exercises the handler dispatch itself.
+				CapabilityGate: func(string) bool { return true },
 			}
 
 			// Build a minimal valid payload for each event
@@ -1166,6 +1177,65 @@ func TestDispatchSignedCommand_AllEvents(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDispatchSignedCommand_CapabilityGate(t *testing.T) {
+	// Temporarily scope an existing, harmless event behind a fake capability
+	// so we can observe both the refuse and allow paths using a handler that
+	// already exists in the dispatch switch (no telephony cases exist yet).
+	orig := commandCapability
+	commandCapability = map[string]string{"check_updates": "test_cap"}
+	defer func() { commandCapability = orig }()
+
+	payload, _ := json.Marshal(map[string]any{})
+
+	newClient := func(gate func(string) bool) (*Client, *bool) {
+		called := new(bool)
+		return &Client{
+			cfg:            Config{ServerURL: "https://example.com", ClientID: "test", AuthToken: "token"},
+			log:            testLog(t),
+			handlers:       Handlers{CheckUpdates: func(CheckUpdatesRequest) { *called = true }},
+			CapabilityGate: gate,
+		}, called
+	}
+
+	t.Run("refuses when gate is nil", func(t *testing.T) {
+		client, called := newClient(nil)
+		client.dispatchSignedCommand("check_updates", payload)
+		if *called {
+			t.Error("handler should not run when CapabilityGate is nil (fail-closed)")
+		}
+	})
+
+	t.Run("refuses when gate returns false", func(t *testing.T) {
+		client, called := newClient(func(string) bool { return false })
+		client.dispatchSignedCommand("check_updates", payload)
+		if *called {
+			t.Error("handler should not run when capability is unavailable")
+		}
+	})
+
+	t.Run("allows when gate returns true", func(t *testing.T) {
+		client, called := newClient(func(name string) bool { return name == "test_cap" })
+		client.dispatchSignedCommand("check_updates", payload)
+		if !*called {
+			t.Error("handler should run when the required capability is enabled")
+		}
+	})
+
+	t.Run("unscoped events dispatch regardless of gate", func(t *testing.T) {
+		called := false
+		client := &Client{
+			cfg:            Config{ServerURL: "https://example.com", ClientID: "test", AuthToken: "token"},
+			log:            testLog(t),
+			handlers:       Handlers{SwitchVariant: func(SwitchVariantRequest) { called = true }},
+			CapabilityGate: func(string) bool { return false },
+		}
+		client.dispatchSignedCommand("switch_variant", payload)
+		if !called {
+			t.Error("an event with no commandCapability entry should dispatch even when the gate returns false")
+		}
+	})
 }
 
 func TestHandshakeURL_UsesSocketPath(t *testing.T) {
