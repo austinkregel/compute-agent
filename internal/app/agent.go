@@ -86,15 +86,21 @@ type Agent struct {
 
 	logTailMu sync.Mutex
 	logTail   map[string]*tailHandle // session -> tail handle
+
+	// execMu guards execCancels: in-flight exec_request id -> cancel func, so an
+	// exec_cancel can kill a running command (the IDE agent loop's Stop).
+	execMu      sync.Mutex
+	execCancels map[string]context.CancelFunc
 }
 
 // New assembles the agent subsystems from config.
 func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 	agent := &Agent{
-		cfg:     cfg,
-		log:     log,
-		logTail: map[string]*tailHandle{},
-		uploads: fileops.NewUploadManager(),
+		cfg:         cfg,
+		log:         log,
+		logTail:     map[string]*tailHandle{},
+		uploads:     fileops.NewUploadManager(),
+		execCancels: map[string]context.CancelFunc{},
 	}
 
 	// Best-effort cleanup of old Windows executables left after an update.
@@ -130,6 +136,7 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		CheckUpdates:    agent.handleCheckUpdates,
 		DirList:         agent.handleDirListRequest,
 		Exec:            agent.handleExecRequest,
+		ExecCancel:      agent.handleExecCancel,
 		ExecAllowlist:   agent.handleExecAllowlist,
 		FileGet:         agent.handleFileGetRequest,
 		FilePutStart:    agent.handleFilePutStart,
@@ -753,7 +760,21 @@ func (a *Agent) handleExecRequest(msg transport.ExecRequest) {
 		cwd = clean
 	}
 
-	res := a.admin.Exec(a.ctxOrBackground(), msg.Command, cwd, time.Duration(msg.TimeoutSec)*time.Second)
+	// Track a cancellable context per request so exec_cancel can kill the process.
+	ctx, cancel := context.WithCancel(a.ctxOrBackground())
+	if msg.RequestID != "" {
+		a.execMu.Lock()
+		a.execCancels[msg.RequestID] = cancel
+		a.execMu.Unlock()
+		defer func() {
+			a.execMu.Lock()
+			delete(a.execCancels, msg.RequestID)
+			a.execMu.Unlock()
+		}()
+	}
+	defer cancel()
+
+	res := a.admin.Exec(ctx, msg.Command, cwd, time.Duration(msg.TimeoutSec)*time.Second)
 	result.Code = res.Summary.Code
 	result.Stdout = res.Stdout
 	result.Stderr = res.Stderr
@@ -761,6 +782,18 @@ func (a *Agent) handleExecRequest(msg transport.ExecRequest) {
 	result.OK = res.Error == "" && res.Summary.Code == 0
 	a.log.Info("exec_request completed", "requestId", msg.RequestID, "code", result.Code, "error", result.Error)
 	emit()
+}
+
+// handleExecCancel kills an in-flight exec_request by id (cancels its context,
+// which terminates the running process). No-op if it already finished.
+func (a *Agent) handleExecCancel(msg transport.ExecCancelRequest) {
+	a.execMu.Lock()
+	cancel, ok := a.execCancels[msg.RequestID]
+	a.execMu.Unlock()
+	if ok {
+		a.log.Info("exec_cancel", "requestId", msg.RequestID)
+		cancel()
+	}
 }
 
 // handleExecAllowlist applies a command allowlist pushed by the control plane.

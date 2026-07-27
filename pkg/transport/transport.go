@@ -70,6 +70,7 @@ type Handlers struct {
 	CheckUpdates    func(CheckUpdatesRequest)
 	DirList         func(DirListRequest)
 	Exec            func(ExecRequest)
+	ExecCancel      func(ExecCancelRequest)
 	ExecAllowlist   func(ExecAllowlist)
 	FileGet         func(FileGetRequest)
 	FilePutStart    func(FilePutStartRequest)
@@ -317,6 +318,14 @@ type ExecResult struct {
 	Stdout    string `json:"stdout"`
 	Stderr    string `json:"stderr"`
 	Error     string `json:"error,omitempty"`
+}
+
+// ExecCancelRequest cancels an in-flight exec_request by id (kills the running
+// process). Used by the IDE's agent loop to stop a running command without
+// dropping the control-plane connection.
+type ExecCancelRequest struct {
+	ClientID  string `json:"clientId"`
+	RequestID string `json:"requestId"`
 }
 
 // ExecAllowlist is pushed by the control plane to set the agent's command
@@ -1002,6 +1011,17 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			// index`) must not block ping/pong or other messages. The admin
 			// runner's own concurrency limit serializes the work.
 			go c.handlers.Exec(msg)
+		}
+
+	case "exec_cancel":
+		var msg ExecCancelRequest
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			c.log.Error("failed to unmarshal exec_cancel payload", "error", err)
+			return
+		}
+		if c.handlers.ExecCancel != nil {
+			// Instant (just cancels a context) — run inline.
+			c.handlers.ExecCancel(msg)
 		}
 
 	case "exec_allowlist":
