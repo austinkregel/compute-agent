@@ -215,6 +215,19 @@ type AdminConfig struct {
 	// local list with the CP's. Empty is treated as "merge".
 	AllowlistMode string `json:"allowlistMode"`
 
+	// TrustedSigners are minisign public keys (base64, optionally "minisign:"-
+	// prefixed). A command whose argv[0] is a file carrying a valid detached
+	// minisign signature (`<path>.minisig`) from one of these keys is permitted
+	// regardless of the command allowlist — this is how a first-party, signed
+	// tool (e.g. the Crucible indexer) runs without the operator listing it. The
+	// trust is in the signature, verified against these pinned keys. Empty
+	// disables signature-based trust entirely.
+	TrustedSigners []string `json:"trustedSigners"`
+
+	// SignatureTrustStrict, when true, ignores TrustedSigners so the command
+	// allowlist is the sole authority (for a locked-down fleet).
+	SignatureTrustStrict bool `json:"signatureTrustStrict"`
+
 	// AllowedCwds restricts server-provided working directories for admin_run.
 	// If empty, any request specifying a Cwd will be rejected.
 	AllowedCwds []string `json:"allowedCwds"`
@@ -335,6 +348,11 @@ func defaultConfig() Config {
 		Admin: AdminConfig{
 			MaxConcurrent:     1,
 			DefaultTimeoutSec: 30,
+			// The Crucible release signing key: a binary carrying a valid
+			// `<path>.minisig` from this key runs regardless of the command
+			// allowlist (see pkg/admin signature trust). Overridable per host via
+			// the config file's admin.trustedSigners.
+			TrustedSigners: []string{"RWQ8+JuRPTjMJNiOAp15pQ5QoMbm5UNuK4ynl05hvL1ePrTLsWsPlinx"},
 		},
 		Transport: TransportConfig{
 			Path:            "/ws/agent",

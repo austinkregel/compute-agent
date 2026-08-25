@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"aead.dev/minisign"
 	"github.com/creack/pty"
 
 	"github.com/austinkregel/compute-agent/pkg/config"
@@ -42,6 +43,13 @@ type Runner struct {
 
 	allowedMu sync.RWMutex
 	allowed   [][]string
+
+	// Signature-based trust: a signed first-party binary runs even when the
+	// command allowlist wouldn't permit it (see isSignedTrusted).
+	trustedKeys     []minisign.PublicKey
+	signatureStrict bool
+	sigCacheMu      sync.Mutex
+	sigCache        map[string]sigCacheEntry
 
 	rateMu          sync.Mutex
 	rateWindowStart time.Time
@@ -118,12 +126,15 @@ func NewRunner(cfg *config.Config, log *logging.Logger, callbacks ShellCallbacks
 	}
 
 	return &Runner{
-		cfg:       cfg,
-		log:       log,
-		callbacks: callbacks,
-		slots:     make(chan struct{}, max(1, cfg.Admin.MaxConcurrent)),
-		sessions:  make(map[string]*shellSession),
-		allowed:   allowed,
+		cfg:             cfg,
+		log:             log,
+		callbacks:       callbacks,
+		slots:           make(chan struct{}, max(1, cfg.Admin.MaxConcurrent)),
+		sessions:        make(map[string]*shellSession),
+		allowed:         allowed,
+		trustedKeys:     parseTrustedSigners(cfg.Admin.TrustedSigners, log),
+		signatureStrict: cfg.Admin.SignatureTrustStrict,
+		sigCache:        make(map[string]sigCacheEntry),
 	}
 }
 
@@ -172,7 +183,7 @@ func (r *Runner) RunCommand(ctx context.Context, req CommandRequest) CommandResu
 		}
 	}
 
-	if !r.isAllowed(cmdTokens) {
+	if !r.permitted(cmdTokens) {
 		return CommandResult{
 			Error:  fmt.Sprintf("command not allowed: %s", req.Command),
 			Stderr: fmt.Sprintf("command blocked by allowlist: %s", req.Command),
@@ -295,7 +306,7 @@ func (r *Runner) Exec(ctx context.Context, command, cwd string, timeout time.Dur
 	if err != nil || len(tokens) == 0 {
 		return CommandResult{Error: fmt.Sprintf("invalid command: %v", err), Stderr: "command blocked: invalid command", Summary: CommandSummary{Code: 126}}
 	}
-	if !r.isAllowed(tokens) {
+	if !r.permitted(tokens) {
 		return CommandResult{Error: fmt.Sprintf("command not allowed: %s", command), Stderr: fmt.Sprintf("command blocked by allowlist: %s", command), Summary: CommandSummary{Code: 126}}
 	}
 
