@@ -335,8 +335,11 @@ func TestMonitorDeduplication(t *testing.T) {
 
 	m := NewMonitor(cfg, mockLogger{})
 
-	// Simulate processing duplicate entries
-	now := time.Now()
+	// Simulate processing duplicate entries. Anchor to a minute boundary so the
+	// three timestamps can't straddle one: the dedup ID truncates to the minute
+	// (see entryToAlert), so a `time.Now()` landing in the last ~2s of a minute
+	// would otherwise split these across two IDs and flake the count.
+	now := time.Now().Truncate(time.Minute)
 	entries := []logEntry{
 		{timestamp: now, message: "kernel panic - test", source: "test"},
 		{timestamp: now.Add(time.Second), message: "kernel panic - test", source: "test"},
