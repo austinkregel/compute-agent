@@ -323,8 +323,11 @@ func (p *Publisher) emitSample() {
 		}
 	} else {
 		temps, tempsErr = hostSensorsTemperatures()
-		// If gopsutil returns nothing (common on some hosts) attempt a Linux sysfs fallback.
-		if (tempsErr != nil || len(temps) == 0) && runtime.GOOS == "linux" {
+		// If gopsutil returns nothing (common on some hosts) attempt the sysfs
+		// fallback. No runtime.GOOS guard is needed: sysfsSensorsTemperatures is
+		// build-tagged — the real reader on Linux, a nil no-op everywhere else —
+		// so this is inert off-Linux while staying swappable (and testable).
+		if tempsErr != nil || len(temps) == 0 {
 			if fb, fbErr := sysfsSensorsTemperatures(); fbErr != nil {
 				// Only warn here if we truly have no temps at all (gopsutil returned none and sysfs failed).
 				if len(temps) == 0 {
