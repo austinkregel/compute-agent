@@ -12,7 +12,7 @@ import (
 )
 
 func TestSafeJoin_BlocksTraversalAndAbs(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	root, err := filepath.Abs(filepath.Join(tmp, "dest"))
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +35,7 @@ func TestSafeJoin_BlocksTraversalAndAbs(t *testing.T) {
 }
 
 func TestGeneratePlan_DestRootAllowlist(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	allowedRoot := filepath.Join(tmp, "allowed")
 	dest := filepath.Join(allowedRoot, "dest")
 	src := filepath.Join(tmp, "src")
@@ -76,7 +76,7 @@ func TestGeneratePlan_DestRootAllowlist(t *testing.T) {
 }
 
 func TestGeneratePlan_SourceRootAllowlist(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	allowed := filepath.Join(tmp, "allowed-src")
 	forbidden := filepath.Join(tmp, "forbidden-src")
 	dest := filepath.Join(tmp, "dest")

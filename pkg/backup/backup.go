@@ -38,6 +38,10 @@ type jobRecord struct {
 	TotalFiles int
 	TotalBytes int64
 	Sample     []string
+	// SkippedSymlinks counts symlinks left out of the backup because they
+	// resolved outside the allowed roots (or no allowlist was configured to
+	// vouch for them). Surfaced so a skipped file is visible, not silent.
+	SkippedSymlinks int
 }
 
 type fileEntry struct {
@@ -145,6 +149,30 @@ func (c *Coordinator) generatePlan(ctx context.Context, req transport.BackupRequ
 			if infoErr != nil {
 				return infoErr
 			}
+
+			// The path we will actually read. For a symlink we resolve its
+			// target and only include it when the target is a regular file that
+			// stays inside the allowed roots — otherwise we skip it (never
+			// follow it). `os.Open` in the copier follows symlinks, so without
+			// this a symlink like `<src>/x -> /etc/shadow` would be copied out.
+			source := path
+			if d.Type()&os.ModeSymlink != 0 {
+				target, terr := filepath.EvalSymlinks(path)
+				if terr != nil {
+					rec.SkippedSymlinks++
+					return nil
+				}
+				ti, tierr := os.Stat(target)
+				if tierr != nil || ti.IsDir() || !c.symlinkTargetAllowed(target) {
+					// Broken, a directory (we don't traverse symlinked dirs), or
+					// escaping the allowed roots — skip, visibly.
+					rec.SkippedSymlinks++
+					return nil
+				}
+				source = target
+				info = ti // the target's size, not the link's
+			}
+
 			rec.TotalFiles++
 			rec.TotalBytes += info.Size()
 
@@ -153,7 +181,7 @@ func (c *Coordinator) generatePlan(ctx context.Context, req transport.BackupRequ
 			}
 
 			rec.Files = append(rec.Files, fileEntry{
-				Source:   path,
+				Source:   source,
 				Relative: sl,
 				Size:     info.Size(),
 			})
@@ -423,31 +451,64 @@ func (c *Coordinator) validateSourceDir(dir string) (string, error) {
 	}
 	real = filepath.Clean(real)
 
-	// Defense-in-depth: do not follow a symlinked source root by default.
+	// With an allowlist configured, the guarantee is about *where the path
+	// resolves*, not whether symlinks were involved: a source that resolves
+	// inside an allowed root is fine (even reached via a symlink); one that
+	// escapes is refused. We return the RESOLVED path so the walk operates on
+	// exactly what we validated (check == use).
+	if c.cfg != nil && len(c.cfg.Backup.AllowedSourceRoots) > 0 {
+		if c.withinAllowedSourceRoots(real) {
+			return real, nil
+		}
+		return "", fmt.Errorf("source directory %q resolves outside the allowed roots; refusing", dir)
+	}
+
+	// No allowlist: we have nothing to judge a symlink's target against, so we
+	// refuse a source root that resolves through a symlink at all — the only
+	// guarantee left without a configured scope.
 	if real != abs {
 		return "", fmt.Errorf("source directory %q resolves through symlinks; refusing", dir)
 	}
-
-	// If an allowlist is configured, enforce it.
-	if c.cfg != nil && len(c.cfg.Backup.AllowedSourceRoots) > 0 {
-		for _, root := range c.cfg.Backup.AllowedSourceRoots {
-			root = strings.TrimSpace(root)
-			if root == "" {
-				continue
-			}
-			absRoot, rerr := filepath.Abs(root)
-			if rerr != nil {
-				continue
-			}
-			absRoot = filepath.Clean(absRoot)
-			if isWithin(absRoot, abs) {
-				return abs, nil
-			}
-		}
-		return "", fmt.Errorf("source directory %q not allowed", dir)
-	}
-
 	return abs, nil
+}
+
+// withinAllowedSourceRoots reports whether an absolute, symlink-resolved path is
+// contained by any configured allowed source root. The roots are themselves
+// symlink-resolved so the comparison is between two canonical paths.
+func (c *Coordinator) withinAllowedSourceRoots(resolved string) bool {
+	if c.cfg == nil {
+		return false
+	}
+	for _, root := range c.cfg.Backup.AllowedSourceRoots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		absRoot = filepath.Clean(absRoot)
+		if realRoot, rerr := filepath.EvalSymlinks(absRoot); rerr == nil {
+			absRoot = filepath.Clean(realRoot)
+		}
+		if isWithin(absRoot, resolved) {
+			return true
+		}
+	}
+	return false
+}
+
+// symlinkTargetAllowed decides whether a symlink encountered during the walk may
+// be followed: only when an allowlist is configured AND the resolved target
+// stays inside it. Without an allowlist we cannot vouch for the target, so we
+// never follow — this is what stops an in-tree symlink from exfiltrating an
+// out-of-scope file.
+func (c *Coordinator) symlinkTargetAllowed(resolvedTarget string) bool {
+	if c.cfg == nil || len(c.cfg.Backup.AllowedSourceRoots) == 0 {
+		return false
+	}
+	return c.withinAllowedSourceRoots(resolvedTarget)
 }
 
 func (c *Coordinator) isAllowedDestRoot(destRootAbs string) bool {

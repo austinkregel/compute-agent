@@ -16,8 +16,22 @@ type noopEmitter struct{}
 
 func (noopEmitter) Emit(string, any) error { return nil }
 
+// realTempDir is t.TempDir() resolved through symlinks. On macOS the temp root
+// lives under /var -> /private/var, so a raw t.TempDir() path resolves through a
+// symlinked ancestor — which validateSourceDir correctly refuses. Real backup
+// sources on a server are canonical paths, so the tests use canonical temp dirs
+// to assert their actual intent (copy/plan/allowlist), not the symlink guard.
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	real, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(tempdir): %v", err)
+	}
+	return real
+}
+
 func TestGeneratePlan(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "src")
 	dest := filepath.Join(tmp, "dest")
 	if err := os.Mkdir(src, 0o755); err != nil {
@@ -61,7 +75,7 @@ func TestGeneratePlan(t *testing.T) {
 }
 
 func TestGeneratePlan_MultipleSourceDirs(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src1 := filepath.Join(tmp, "src1")
 	src2 := filepath.Join(tmp, "src2")
 	dest := filepath.Join(tmp, "dest")
@@ -93,7 +107,7 @@ func TestGeneratePlan_MultipleSourceDirs(t *testing.T) {
 }
 
 func TestGeneratePlan_NestedDirectories(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "src")
 	dest := filepath.Join(tmp, "dest")
 
@@ -121,7 +135,7 @@ func TestGeneratePlan_NestedDirectories(t *testing.T) {
 }
 
 func TestGeneratePlan_IgnoreGlobs(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "src")
 	dest := filepath.Join(tmp, "dest")
 
@@ -161,7 +175,7 @@ func TestGeneratePlan_IgnoreGlobs(t *testing.T) {
 }
 
 func TestGeneratePlan_SampleLimit(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "src")
 	dest := filepath.Join(tmp, "dest")
 
@@ -209,7 +223,7 @@ func TestGeneratePlan_NoSourceDirs(t *testing.T) {
 }
 
 func TestGeneratePlan_EmptyDestRoot(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "src")
 	os.Mkdir(src, 0o755)
 
@@ -228,7 +242,7 @@ func TestGeneratePlan_EmptyDestRoot(t *testing.T) {
 }
 
 func TestGeneratePlan_RemoteHost(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "src")
 	os.Mkdir(src, 0o755)
 
@@ -248,7 +262,7 @@ func TestGeneratePlan_RemoteHost(t *testing.T) {
 }
 
 func TestPlan_EmitsEvent(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "src")
 	dest := filepath.Join(tmp, "dest")
 	os.Mkdir(src, 0o755)
@@ -296,7 +310,7 @@ func TestRun_UnknownPlan(t *testing.T) {
 }
 
 func TestBackup_PathTraversal_Blocked(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "src")
 	dest := filepath.Join(tmp, "dest")
 	outside := filepath.Join(tmp, "outside.txt")
@@ -342,7 +356,7 @@ func TestBackup_PathTraversal_Blocked(t *testing.T) {
 }
 
 func TestBackup_SourcePathTraversal_Blocked(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	allowedRoot := filepath.Join(tmp, "allowed")
 	forbiddenRoot := filepath.Join(tmp, "forbidden")
 	link := filepath.Join(tmp, "link-to-forbidden")
@@ -376,7 +390,7 @@ func TestBackup_SourcePathTraversal_Blocked(t *testing.T) {
 }
 
 func TestRun_CopiesFiles(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "src")
 	dest := filepath.Join(tmp, "dest")
 	os.Mkdir(src, 0o755)
@@ -442,7 +456,7 @@ func TestRun_CopiesFiles(t *testing.T) {
 }
 
 func TestRun_ProgressReporting(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "src")
 	dest := filepath.Join(tmp, "dest")
 	os.Mkdir(src, 0o755)
@@ -483,7 +497,7 @@ func TestRun_ProgressReporting(t *testing.T) {
 }
 
 func TestRun_ContextCancellation(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "src")
 	dest := filepath.Join(tmp, "dest")
 	os.Mkdir(src, 0o755)
@@ -512,7 +526,7 @@ func TestRun_ContextCancellation(t *testing.T) {
 }
 
 func TestCopyFile_UsesRestrictivePermissions(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "source.txt")
 	dest := filepath.Join(tmp, "dest.txt")
 
@@ -535,7 +549,7 @@ func TestCopyFile_UsesRestrictivePermissions(t *testing.T) {
 }
 
 func TestBackup_FilePermissions_Secure(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "source.txt")
 	dest := filepath.Join(tmp, "destdir", "sub", "dest.txt")
 
@@ -634,7 +648,7 @@ func TestSanitizePlanID(t *testing.T) {
 }
 
 func TestSafeJoin(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 
 	tests := []struct {
 		name     string
@@ -713,7 +727,7 @@ func TestMatchesAny(t *testing.T) {
 }
 
 func TestCopyFileWithProgress(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "source.txt")
 	dest := filepath.Join(tmp, "dest.txt")
 	content := []byte("Hello, this is test content for copying!")
@@ -756,7 +770,7 @@ func TestCopyFileWithProgress(t *testing.T) {
 }
 
 func TestCopyFileWithProgress_ContextCancellation(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "source.txt")
 	dest := filepath.Join(tmp, "dest.txt")
 
@@ -782,7 +796,7 @@ func TestPersistAndLoadPlan(t *testing.T) {
 	log, _ := logging.New(logging.Options{Level: "error"})
 	coord := NewCoordinator(&config.Config{}, log, noopEmitter{})
 
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	src := filepath.Join(tmp, "src")
 	dest := filepath.Join(tmp, "dest")
 	os.Mkdir(src, 0o755)
@@ -836,7 +850,7 @@ func TestPersistProgress(t *testing.T) {
 }
 
 func TestAtomicWriteFile(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	path := filepath.Join(tmp, "atomic.txt")
 	content := []byte("atomic content")
 
@@ -866,7 +880,7 @@ func TestAtomicWriteFile(t *testing.T) {
 }
 
 func TestValidateSourceDir_AllowedRoots(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	allowed := filepath.Join(tmp, "allowed")
 	forbidden := filepath.Join(tmp, "forbidden")
 	os.Mkdir(allowed, 0o755)
@@ -893,7 +907,7 @@ func TestValidateSourceDir_AllowedRoots(t *testing.T) {
 }
 
 func TestIsAllowedDestRoot(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	allowed := filepath.Join(tmp, "allowed")
 	forbidden := filepath.Join(tmp, "forbidden")
 	os.Mkdir(allowed, 0o755)
