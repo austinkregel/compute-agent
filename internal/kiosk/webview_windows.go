@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 // webviewAvailable indicates whether WebView support is compiled in.
@@ -47,15 +49,39 @@ func findChromePath() string {
 	return ""
 }
 
-func winBrowserArgs(browserPath, url string, fullscreen bool) []string {
-	isEdge := filepath.Base(browserPath) == "msedge.exe"
-	if fullscreen {
-		if isEdge {
-			return []string{"--kiosk", "--edge-kiosk-type=fullscreen", url}
-		}
-		return []string{"--kiosk", url}
+// kioskUserDataDir returns a dedicated browser profile dir so the kiosk launch
+// is independent of any browser the user already has open.
+func kioskUserDataDir(browserPath string) string {
+	base, err := os.UserCacheDir()
+	if err != nil || base == "" {
+		base = os.TempDir()
 	}
-	return []string{"--app=" + url}
+	name := "chrome"
+	if filepath.Base(browserPath) == "msedge.exe" {
+		name = "edge"
+	}
+	return filepath.Join(base, "backup-agent", "kiosk-"+name)
+}
+
+func winBrowserArgs(browserPath, url, userDataDir string, fullscreen bool) []string {
+	isEdge := filepath.Base(browserPath) == "msedge.exe"
+
+	args := []string{
+		"--user-data-dir=" + userDataDir,
+		"--no-first-run",
+		"--no-default-browser-check",
+	}
+	if fullscreen {
+		// Position 0,0 is the primary display's origin, so --kiosk fullscreens there.
+		args = append(args, "--window-position=0,0")
+		if isEdge {
+			args = append(args, "--kiosk", "--edge-kiosk-type=fullscreen")
+		} else {
+			args = append(args, "--kiosk")
+		}
+		return append(args, url)
+	}
+	return append(args, "--app="+url)
 }
 
 // launchWebView opens a browser in kiosk mode pointing to the given URL.
@@ -70,6 +96,9 @@ func launchWebView(url string, fullscreen bool) error {
 	} else {
 		return errors.New("kiosk mode requires Microsoft Edge or Google Chrome; neither was found")
 	}
+
+	userDataDir := kioskUserDataDir(browserPath)
+	_ = os.MkdirAll(userDataDir, 0o755)
 
 	var (
 		procMu sync.Mutex
@@ -95,9 +124,10 @@ func launchWebView(url string, fullscreen bool) error {
 
 	currentURL := url
 	for {
-		args := winBrowserArgs(browserPath, currentURL, fullscreen)
+		args := winBrowserArgs(browserPath, currentURL, userDataDir, fullscreen)
 		cmd := exec.Command(browserPath, args...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		// CREATE_NO_WINDOW suppresses a console without hiding the browser window.
+		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
 
 		if err := cmd.Start(); err != nil {
 			return err
