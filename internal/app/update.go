@@ -21,6 +21,9 @@ import (
 	"time"
 )
 
+// exitCodeRestart signals the supervisor to restart the agent on the new binary.
+const exitCodeRestart = 10
+
 type updateResult struct {
 	OK      bool
 	Tag     string
@@ -103,11 +106,20 @@ func (a *Agent) trySelfUpdate(ctx context.Context, repo string, desiredTag strin
 		return updateResult{OK: true, Tag: tag, Detail: "exec failed unexpectedly"}
 	}
 
-	// Windows: start new process and exit; file swapping may be blocked on some setups.
+	// Under the SCM, exit and let it restart on the new binary.
+	if runningAsService() {
+		a.log.Info("update staged; exiting for service restart", "tag", tag)
+		time.Sleep(250 * time.Millisecond)
+		os.Exit(exitCodeRestart)
+		return updateResult{OK: true, Tag: tag}
+	}
+
+	// Interactive/console: spawn the new process in its own group and exit.
 	cmd := exec.Command(exePath, os.Args[1:]...)
 	cmd.Env = os.Environ()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = windowsRestartAttr()
 	if err := cmd.Start(); err != nil {
 		return updateResult{OK: false, Tag: tag, Error: "restart", Detail: err.Error()}
 	}
@@ -515,11 +527,22 @@ func (a *Agent) trySwitchVariant(ctx context.Context, repo string, tag string, t
 	// If the new process fails quickly, we need to rollback.
 
 	if runtime.GOOS == "windows" {
-		// Windows: start the new process and monitor it
+		// Under the SCM, exit and let it restart on the new variant. Spawning
+		// here would leave both the child and the restarted instance running.
+		if runningAsService() {
+			os.Remove(backupPath)
+			a.log.Info("variant switched; exiting for service restart", "variant", targetVariant)
+			time.Sleep(250 * time.Millisecond)
+			os.Exit(exitCodeRestart)
+			return updateResult{OK: true, Variant: targetVariant, Tag: result.Tag}
+		}
+
+		// Interactive/console: start the new process and monitor it.
 		cmd := exec.Command(exePath, os.Args[1:]...)
 		cmd.Env = os.Environ()
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+		cmd.SysProcAttr = windowsRestartAttr()
 		if err := cmd.Start(); err != nil {
 			a.log.Error("failed to start new variant", "error", err)
 			// Rollback
