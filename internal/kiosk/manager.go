@@ -195,8 +195,11 @@ func (m *manager) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(websocket.StatusNormalClosure, "closed")
 
 	m.log.Info("kiosk page connected")
-	m.setWSConn(conn)
-	defer m.setWSConn(nil)
+	if prev := m.setWSConn(conn); prev != nil {
+		m.log.Info("kiosk page reconnected; closing superseded connection")
+		_ = prev.Close(websocket.StatusNormalClosure, "superseded")
+	}
+	defer m.clearWSConn(conn)
 
 	// Send current content immediately
 	m.pushContent()
@@ -206,7 +209,7 @@ func (m *manager) handleWS(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, msg, err := conn.Read(ctx)
 		if err != nil {
-			m.log.Debug("kiosk ws read error", "error", err)
+			m.log.Info("kiosk page disconnected", "error", err)
 			break
 		}
 
@@ -343,13 +346,42 @@ func (m *manager) setRunning(running bool) {
 	m.emitStatus()
 }
 
-func (m *manager) setWSConn(conn *websocket.Conn) {
+// setWSConn installs conn as the live kiosk page connection, returning any
+// connection it superseded so the caller can close it. A page that reconnects
+// before the server notices the old socket is dead would otherwise leave two
+// handlers running against one field.
+func (m *manager) setWSConn(conn *websocket.Conn) *websocket.Conn {
 	m.wsMu.Lock()
+	prev := m.wsConn
 	m.wsConn = conn
 	m.wsMu.Unlock()
 
 	m.mu.Lock()
 	m.connected = conn != nil
+	m.mu.Unlock()
+
+	m.emitStatus()
+	if prev == conn {
+		return nil
+	}
+	return prev
+}
+
+// clearWSConn drops conn only if it is still the live connection. An exiting
+// handler must not nil out a socket that a newer page connection already
+// installed: doing so silently disables pushContent/PushStats while the page
+// sits there looking connected.
+func (m *manager) clearWSConn(conn *websocket.Conn) {
+	m.wsMu.Lock()
+	if m.wsConn != conn {
+		m.wsMu.Unlock()
+		return
+	}
+	m.wsConn = nil
+	m.wsMu.Unlock()
+
+	m.mu.Lock()
+	m.connected = false
 	m.mu.Unlock()
 
 	m.emitStatus()
