@@ -1140,12 +1140,19 @@ func TestDispatchSignedCommand_AllEvents(t *testing.T) {
 				handlers.SMSMessagesRequest = func(SMSMessagesRequest) { mu.Lock(); called = true; mu.Unlock() }
 			}
 
+			log, err := logging.New(logging.Options{Level: "error"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { log.Sync() })
+
 			client := &Client{
 				cfg: Config{
 					ServerURL: "https://example.com",
 					ClientID:  "test",
 					AuthToken: "token",
 				},
+				log:      log,
 				handlers: handlers,
 				// sms_*/telephony events are capability-gated (see
 				// commandCapability); allow them through so this table test
@@ -1324,5 +1331,55 @@ func TestNew_InvalidServerURL(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse server URL") {
 		t.Errorf("expected parse error, got: %v", err)
+	}
+}
+
+// The acting principal survives a sign/verify round trip.
+func TestActorOf_ExtractsPrincipal(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{"present", `{"_actor":"oidc-sub-123","clientId":"n1"}`, "oidc-sub-123"},
+		{"system", `{"_actor":"system:backup-server"}`, "system:backup-server"},
+		{"absent (older server)", `{"clientId":"n1"}`, ""},
+		{"empty payload", ``, ""},
+		{"not an object", `"scalar"`, ""},
+		{"wrong type", `{"_actor":42}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := actorOf(json.RawMessage(tc.payload)); got != tc.want {
+				t.Errorf("actorOf(%s) = %q, want %q", tc.payload, got, tc.want)
+			}
+		})
+	}
+}
+
+// Tampering with the actor after signing invalidates the command.
+func TestActor_TamperingBreaksSignature(t *testing.T) {
+	key := cmdsig.DeriveSessionKey("token", "nonce-abc")
+	signer := cmdsig.NewSigner(key)
+
+	env, err := signer.Sign("exec_request", map[string]any{
+		"_actor": "alice", "command": "id",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	verifier := cmdsig.NewVerifier(key)
+	if err := verifier.Verify(env); err != nil {
+		t.Fatalf("untampered command failed to verify: %v", err)
+	}
+	if got := actorOf(env.Payload); got != "alice" {
+		t.Fatalf("actor = %q, want alice", got)
+	}
+
+	// Re-credit the action without re-signing.
+	tampered := *env
+	tampered.Payload = json.RawMessage(`{"_actor":"bob","command":"id"}`)
+	if err := cmdsig.NewVerifier(key).Verify(&tampered); err == nil {
+		t.Error("a command with a rewritten actor verified; attribution is forgeable")
 	}
 }

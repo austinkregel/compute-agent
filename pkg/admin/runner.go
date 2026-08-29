@@ -119,7 +119,9 @@ func NewRunner(cfg *config.Config, log *logging.Logger, callbacks ShellCallbacks
 		}
 		toks, err := tokenizeCommandLine(entry)
 		if err != nil || len(toks) == 0 {
-			log.Debug("invalid allowed command entry; ignoring", "entry", entry, "error", err)
+			// Warn, not Debug: a dropped entry shrinks the allowlist, and
+			// dropping every entry denies all commands.
+			log.Warn("invalid allowed command entry; ignoring", "entry", entry, "error", err)
 			continue
 		}
 		allowed = append(allowed, toks)
@@ -268,7 +270,7 @@ func (r *Runner) RunCommand(ctx context.Context, req CommandRequest) CommandResu
 }
 
 // SetAllowlist replaces the command allowlist at runtime (the control plane
-// pushes the canonical list to agents). An empty list means "allow any command"
+// pushes the canonical list to agents). An empty list means "permit nothing"
 // (matches isAllowed). Thread-safe; governs both admin_run and Exec.
 func (r *Runner) SetAllowlist(entries []string) {
 	var next [][]string
@@ -731,7 +733,11 @@ func (r *Runner) isAllowed(tokens []string) bool {
 	allowedList := r.allowed
 	r.allowedMu.RUnlock()
 	if len(allowedList) == 0 {
-		return true
+		// No allowlist means no permitted commands, matching isAllowedCwd.
+		// An agent config with no admin.allowed, a control plane pushing [],
+		// and every configured entry failing to tokenize all reach here. The
+		// control plane seeds a non-empty list and pushes it on connect.
+		return false
 	}
 	cmdNorm := normalizeTokens(tokens)
 	for _, allowed := range allowedList {

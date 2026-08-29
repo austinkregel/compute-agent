@@ -889,7 +889,41 @@ func (c *Client) verifyCommand(envelope *cmdsig.SignedEnvelope) error {
 }
 
 // dispatchSignedCommand routes a verified command payload to the appropriate handler.
+// actorPayloadKey carries the principal that caused a command, folded into the
+// signed payload by the control plane. Riding inside the payload puts it under
+// the command signature, so rewriting it invalidates the command. Absent on
+// commands from servers predating the field.
+const actorPayloadKey = "_actor"
+
+// actorOf extracts the acting principal from a signed payload.
+func actorOf(payload json.RawMessage) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return ""
+	}
+	raw, ok := envelope[actorPayloadKey]
+	if !ok {
+		return ""
+	}
+	var actor string
+	if err := json.Unmarshal(raw, &actor); err != nil {
+		return ""
+	}
+	return actor
+}
+
 func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
+	// Record who caused this before running it. The agent's log persists on the
+	// managed machine independently of the control plane's audit trail.
+	if actor := actorOf(payload); actor != "" {
+		c.log.Info("executing signed command", "event", event, "actor", actor)
+	} else {
+		c.log.Info("executing signed command", "event", event, "actor", "unattributed")
+	}
+
 	if reqCap, scoped := commandCapability[event]; scoped {
 		if c.CapabilityGate == nil || !c.CapabilityGate(reqCap) {
 			c.log.Warn("refusing capability-scoped command", "event", event, "capability", reqCap)

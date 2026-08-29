@@ -354,7 +354,9 @@ func TestRunCommand_EmptyCommand(t *testing.T) {
 	}
 }
 
-func TestRunCommand_Allowlist_Empty(t *testing.T) {
+// An empty allowlist permits nothing. An agent configured with no
+// admin.allowed, or one whose entries all failed to tokenize, lands here.
+func TestRunCommand_Allowlist_EmptyDeniesAll(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell command test not portable to windows")
 	}
@@ -367,14 +369,32 @@ func TestRunCommand_Allowlist_Empty(t *testing.T) {
 	}
 	r := NewRunner(cfg, log, ShellCallbacks{})
 
-	// Empty allowlist should allow all
-	res := r.RunCommand(context.Background(), CommandRequest{
-		Command: "echo test",
-		Timeout: time.Second,
-	})
+	for _, cmd := range []string{"echo test", "cat /etc/shadow", "curl https://example.com"} {
+		res := r.RunCommand(context.Background(), CommandRequest{Command: cmd, Timeout: time.Second})
+		if res.Summary.Code != 126 {
+			t.Errorf("%q: code %d, want 126 (blocked) with an empty allowlist", cmd, res.Summary.Code)
+		}
+	}
+}
 
-	if res.Summary.Code != 0 {
-		t.Errorf("expected empty allowlist to allow command, got code %d", res.Summary.Code)
+// Entries that fail to tokenize are dropped. If every entry is dropped the
+// runner denies, the same as for an absent config.
+func TestRunCommand_AllUnparseableEntriesDenyAll(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell command test not portable to windows")
+	}
+	log, _ := logging.New(logging.Options{Level: "error"})
+	cfg := &config.Config{
+		Admin: config.AdminConfig{
+			Allowed:       []string{`echo "unterminated`, "   ", ""},
+			MaxConcurrent: 1,
+		},
+	}
+	r := NewRunner(cfg, log, ShellCallbacks{})
+
+	res := r.RunCommand(context.Background(), CommandRequest{Command: "echo test", Timeout: time.Second})
+	if res.Summary.Code != 126 {
+		t.Errorf("code %d, want 126 when every allowlist entry was dropped", res.Summary.Code)
 	}
 }
 
@@ -812,9 +832,11 @@ func TestSetAllowlist_UpdatesPolicy(t *testing.T) {
 	if code := r.Exec(context.Background(), "echo x", "", time.Second).Summary.Code; code != 126 {
 		t.Fatalf("expected 'echo' blocked after update, got %d", code)
 	}
-	// Empty allowlist = allow any.
+	// A control plane pushing an empty list permits nothing.
 	r.SetAllowlist(nil)
-	if code := r.Exec(context.Background(), "echo x", "", time.Second).Summary.Code; code != 0 {
-		t.Fatalf("expected allow-all with empty allowlist, got %d", code)
+	for _, cmd := range []string{"echo x", "true"} {
+		if code := r.Exec(context.Background(), cmd, "", time.Second).Summary.Code; code != 126 {
+			t.Fatalf("%q: code %d, want 126 after an empty allowlist push", cmd, code)
+		}
 	}
 }
