@@ -915,13 +915,28 @@ func actorOf(payload json.RawMessage) string {
 	return actor
 }
 
+// highVolumeCommands arrive per keystroke (shell_input) or per chunk of a file
+// transfer, so they are attributed at Debug. The session-scoped command that
+// opened the stream is recorded at Info, which is what ties the stream to a
+// person; logging every frame would bury it.
+var highVolumeCommands = map[string]bool{
+	"shell_input":     true,
+	"shell_resize":    true,
+	"file_put_chunk":  true,
+	"log_tail_output": true,
+}
+
 func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 	// Record who caused this before running it. The agent's log persists on the
 	// managed machine independently of the control plane's audit trail.
-	if actor := actorOf(payload); actor != "" {
-		c.log.Info("executing signed command", "event", event, "actor", actor)
+	actor := actorOf(payload)
+	if actor == "" {
+		actor = "unattributed"
+	}
+	if highVolumeCommands[event] {
+		c.log.Debug("executing signed command", "event", event, "actor", actor)
 	} else {
-		c.log.Info("executing signed command", "event", event, "actor", "unattributed")
+		c.log.Info("executing signed command", "event", event, "actor", actor)
 	}
 
 	if reqCap, scoped := commandCapability[event]; scoped {
