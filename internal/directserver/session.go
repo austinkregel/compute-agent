@@ -209,6 +209,8 @@ type fileGetRequest struct {
 	RequestID string `json:"requestId"`
 	Path      string `json:"path"`
 	MaxSize   int64  `json:"maxSize"`
+	Offset    int64  `json:"offset"`
+	Length    int64  `json:"length"`
 }
 
 func (s *Session) handleFileGet(data json.RawMessage) {
@@ -221,6 +223,14 @@ func (s *Session) handleFileGet(data json.RawMessage) {
 		result["ok"] = false
 		result["error"] = reason
 		s.emit("file_get_result", result)
+	}
+	emitChunk := func(offset int64, chunk []byte) {
+		s.emit("file_get_chunk", map[string]any{
+			"clientId":  s.clientID,
+			"requestId": msg.RequestID,
+			"offset":    offset,
+			"data":      base64.StdEncoding.EncodeToString(chunk),
+		})
 	}
 
 	clean, err := s.confine(msg.Path)
@@ -237,14 +247,7 @@ func (s *Session) handleFileGet(data json.RawMessage) {
 		fail("path is a directory")
 		return
 	}
-	limit := s.maxBytes
-	if msg.MaxSize > 0 && msg.MaxSize < limit {
-		limit = msg.MaxSize
-	}
-	if limit > 0 && info.Size() > limit {
-		fail(fmt.Sprintf("file is %d bytes, over the %d-byte limit", info.Size(), limit))
-		return
-	}
+	size := info.Size()
 
 	f, err := os.Open(clean)
 	if err != nil {
@@ -253,17 +256,61 @@ func (s *Session) handleFileGet(data json.RawMessage) {
 	}
 	defer f.Close()
 
+	// Windowed read (offset/length).
+	if msg.Offset > 0 || msg.Length > 0 {
+		if msg.Offset > 0 {
+			if _, err := f.Seek(msg.Offset, io.SeekStart); err != nil {
+				fail(err.Error())
+				return
+			}
+		}
+		result["size"] = size
+		result["offset"] = msg.Offset
+		serve, eof, truncated := fileops.RangeWindow(size, msg.Offset, msg.Length, msg.MaxSize, s.maxBytes)
+		buf := make([]byte, getChunkSize)
+		var sent int64
+		for sent < serve {
+			chunk := int64(len(buf))
+			if r := serve - sent; r < chunk {
+				chunk = r
+			}
+			n, readErr := f.Read(buf[:chunk])
+			if n > 0 {
+				emitChunk(msg.Offset+sent, buf[:n])
+				sent += int64(n)
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				fail(readErr.Error())
+				return
+			}
+		}
+		result["ok"] = true
+		result["returned"] = sent
+		result["eof"] = eof || msg.Offset+sent >= size
+		result["truncated"] = truncated
+		s.emit("file_get_result", result)
+		return
+	}
+
+	// Whole-file read: reject over the effective limit.
+	limit := s.maxBytes
+	if msg.MaxSize > 0 && msg.MaxSize < limit {
+		limit = msg.MaxSize
+	}
+	if limit > 0 && size > limit {
+		fail(fmt.Sprintf("file is %d bytes, over the %d-byte limit", size, limit))
+		return
+	}
+
 	buf := make([]byte, getChunkSize)
 	var offset int64
 	for {
 		n, readErr := f.Read(buf)
 		if n > 0 {
-			s.emit("file_get_chunk", map[string]any{
-				"clientId":  s.clientID,
-				"requestId": msg.RequestID,
-				"offset":    offset,
-				"data":      base64.StdEncoding.EncodeToString(buf[:n]),
-			})
+			emitChunk(offset, buf[:n])
 			offset += int64(n)
 		}
 		if readErr == io.EOF {
@@ -275,7 +322,9 @@ func (s *Session) handleFileGet(data json.RawMessage) {
 		}
 	}
 	result["ok"] = true
-	result["size"] = offset
+	result["size"] = size
+	result["returned"] = offset
+	result["eof"] = true
 	s.emit("file_get_result", result)
 }
 

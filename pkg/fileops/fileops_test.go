@@ -978,3 +978,75 @@ func TestCheckPathPolicy_CaseInsensitive(t *testing.T) {
 		})
 	}
 }
+
+func TestRangeWindow(t *testing.T) {
+	const hard = 1000
+	tests := []struct {
+		name                        string
+		size, offset, length, maxSz int64
+		wantServe                   int64
+		wantEOF, wantTrunc          bool
+	}{
+		{"whole file", 100, 0, 0, 0, 100, true, false},
+		{"window within file", 100, 10, 20, 0, 20, false, false},
+		{"length to EOF", 100, 90, 20, 0, 10, true, false},
+		{"offset at EOF", 100, 100, 20, 0, 0, true, false},
+		{"offset past EOF", 100, 200, 20, 0, 0, true, false},
+		{"maxSize cuts below length", 100, 0, 50, 20, 20, false, true},
+		{"length equals maxSize is not truncated", 100, 0, 20, 20, 20, false, false},
+		{"hard cap cuts the window", 5000, 0, 0, 0, hard, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			serve, eof, trunc := RangeWindow(tt.size, tt.offset, tt.length, tt.maxSz, hard)
+			if serve != tt.wantServe || eof != tt.wantEOF || trunc != tt.wantTrunc {
+				t.Errorf("RangeWindow = (%d, %v, %v), want (%d, %v, %v)",
+					serve, eof, trunc, tt.wantServe, tt.wantEOF, tt.wantTrunc)
+			}
+		})
+	}
+}
+
+func TestOpenForReadRange(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "r.txt")
+	if err := os.WriteFile(file, []byte("hello world"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("seeks to offset and reports total size", func(t *testing.T) {
+		f, size, err := OpenForReadRange(file, 6)
+		if err != nil {
+			t.Fatalf("OpenForReadRange = %v", err)
+		}
+		defer f.Close()
+		if size != 11 {
+			t.Errorf("size = %d, want 11", size)
+		}
+		got, _ := io.ReadAll(f)
+		if string(got) != "world" {
+			t.Errorf("read = %q, want %q", got, "world")
+		}
+	})
+
+	t.Run("does not reject a large file (no size gate)", func(t *testing.T) {
+		big := filepath.Join(dir, "big.bin")
+		if err := os.WriteFile(big, make([]byte, 4096), 0644); err != nil {
+			t.Fatal(err)
+		}
+		f, size, err := OpenForReadRange(big, 0)
+		if err != nil {
+			t.Fatalf("OpenForReadRange = %v", err)
+		}
+		defer f.Close()
+		if size != 4096 {
+			t.Errorf("size = %d, want 4096", size)
+		}
+	})
+
+	t.Run("rejects a directory", func(t *testing.T) {
+		if _, _, err := OpenForReadRange(dir, 0); !errors.Is(err, ErrIsDirectory) {
+			t.Errorf("err = %v, want ErrIsDirectory", err)
+		}
+	})
+}

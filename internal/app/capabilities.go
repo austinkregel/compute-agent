@@ -162,3 +162,13 @@ func (t telephonyCap) Probe(ctx context.Context) capability.Info {
 	}
 	return capability.Info{State: capability.StateEnabled, Features: []string{"sms"}}
 }
+
+// fileCap advertises the file-read protocol features the agent supports.
+type fileCap struct{}
+
+func (fileCap) Name() string  { return "file" }
+func (fileCap) Dynamic() bool { return false }
+
+func (fileCap) Probe(ctx context.Context) capability.Info {
+	return capability.Info{State: capability.StateEnabled, Features: []string{"range"}}
+}

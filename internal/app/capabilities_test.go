@@ -106,3 +106,26 @@ func TestDirectCap_Probe(t *testing.T) {
 		}
 	})
 }
+
+func TestFileCap_Probe(t *testing.T) {
+	var fc fileCap
+	if fc.Name() != "file" {
+		t.Errorf("name = %q, want %q", fc.Name(), "file")
+	}
+	if fc.Dynamic() {
+		t.Error("file capability is static, should not be re-probed each tick")
+	}
+	info := fc.Probe(context.Background())
+	if info.State != capability.StateEnabled {
+		t.Errorf("state = %q, want enabled", info.State)
+	}
+	found := false
+	for _, f := range info.Features {
+		if f == "range" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("features = %v, want to include %q", info.Features, "range")
+	}
+}

@@ -348,6 +348,8 @@ type FileGetRequest struct {
 	RequestID string `json:"requestId"`
 	Path      string `json:"path"`
 	MaxSize   int64  `json:"maxSize,omitempty"` // Optional cap; 0 = agent default limit
+	Offset    int64  `json:"offset,omitempty"`  // Windowed read: start byte (0 = whole file)
+	Length    int64  `json:"length,omitempty"`  // Windowed read: bytes from offset (0 = to EOF)
 }
 
 // FileGetResult is the terminal frame of a file read (after all chunks).
@@ -356,8 +358,14 @@ type FileGetResult struct {
 	RequestID string `json:"requestId"`
 	OK        bool   `json:"ok"`
 	Path      string `json:"path,omitempty"`
-	Size      int64  `json:"size,omitempty"`
+	Size      int64  `json:"size,omitempty"` // Total file size
 	Error     string `json:"error,omitempty"`
+	// Ranged-read metadata (populated for windowed reads).
+	Offset    int64  `json:"offset,omitempty"`    // Served window start
+	Returned  int64  `json:"returned,omitempty"`  // Bytes streamed
+	EOF       bool   `json:"eof,omitempty"`       // Window reached end of file
+	Truncated bool   `json:"truncated,omitempty"` // Window cut short by a cap
+	ErrorCode string `json:"errorCode,omitempty"`
 }
 
 // FileDeleteRequest asks the agent to delete a file or empty directory.

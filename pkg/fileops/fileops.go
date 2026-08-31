@@ -428,6 +428,63 @@ func OpenForRead(path string, maxBytes int64) (*os.File, int64, error) {
 	return f, info.Size(), nil
 }
 
+// OpenForReadRange opens a file for a windowed read starting at byte `offset`,
+// returning the open file (seeked to `offset`) and the file's total size. It
+// does not reject on file size; the read length is bounded by the caller.
+func OpenForReadRange(path string, offset int64) (*os.File, int64, error) {
+	absPath, err := ValidatePath(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := CheckPathPolicy(absPath, true); err != nil {
+		return nil, 0, err
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, 0, err
+	}
+	if info.IsDir() {
+		return nil, 0, ErrIsDirectory
+	}
+	f, err := os.Open(absPath)
+	if err != nil {
+		return nil, 0, err
+	}
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			f.Close()
+			return nil, 0, err
+		}
+	}
+	return f, info.Size(), nil
+}
+
+// RangeWindow computes how many bytes to serve for a windowed read from `offset`
+// into a file of `size`, honoring an optional requested `length`, an optional
+// `maxSize` cap, and a hard `hardCap`. It reports whether the window reaches EOF
+// and whether it was cut short (truncated) by a cap below the requested length.
+// An offset at or past EOF serves nothing and reports eof.
+func RangeWindow(size, offset, length, maxSize, hardCap int64) (serve int64, eof, truncated bool) {
+	if offset >= size {
+		return 0, true, false
+	}
+	remaining := size - offset
+	requested := remaining
+	if length > 0 && length < requested {
+		requested = length
+	}
+	serve = requested
+	if maxSize > 0 && maxSize < serve {
+		serve = maxSize
+	}
+	if hardCap > 0 && hardCap < serve {
+		serve = hardCap
+	}
+	eof = offset+serve >= size
+	truncated = !eof && serve < requested
+	return serve, eof, truncated
+}
+
 // --- Chmod operation ---
 
 // ChmodFile changes the permissions of a file.

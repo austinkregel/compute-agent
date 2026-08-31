@@ -211,6 +211,7 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 	agent.caps.Register(dockerCap{enabled: cfg.Docker.Enabled, client: dc})
 	agent.caps.Register(batteryCap{})
 	agent.caps.Register(thermalCap{})
+	agent.caps.Register(fileCap{})
 
 	// Wire the Android companion app bridge if enabled (phone-class agents only).
 	if cfg.Telephony.Enabled {
@@ -898,23 +899,81 @@ func (a *Agent) handleFileGetRequest(msg transport.FileGetRequest) {
 		RequestID: msg.RequestID,
 		Path:      msg.Path,
 	}
-	fail := func(reason string) {
+	fail := func(err error) {
 		result.OK = false
-		result.Error = reason
-		a.log.Warn("file_get_request failed", "requestId", msg.RequestID, "path", msg.Path, "error", reason)
-		if err := a.transport.Emit("file_get_result", result); err != nil {
-			a.log.Error("failed to emit file_get_result", "requestId", msg.RequestID, "error", err)
+		result.Error = err.Error()
+		result.ErrorCode = fileGetErrorCode(err)
+		a.log.Warn("file_get_request failed", "requestId", msg.RequestID, "path", msg.Path, "error", result.Error)
+		if emitErr := a.transport.Emit("file_get_result", result); emitErr != nil {
+			a.log.Error("failed to emit file_get_result", "requestId", msg.RequestID, "error", emitErr)
+		}
+	}
+	emitChunk := func(offset int64, data []byte) error {
+		return a.transport.Emit("file_get_chunk", map[string]any{
+			"clientId":  a.cfg.ClientID,
+			"requestId": msg.RequestID,
+			"offset":    offset,
+			"data":      base64.StdEncoding.EncodeToString(data),
+		})
+	}
+	emitResult := func() {
+		if emitErr := a.transport.Emit("file_get_result", result); emitErr != nil {
+			a.log.Error("failed to emit file_get_result", "requestId", msg.RequestID, "error", emitErr)
 		}
 	}
 
+	// Windowed read (offset/length): stream only the requested byte range.
+	if msg.Offset > 0 || msg.Length > 0 {
+		f, size, err := fileops.OpenForReadRange(msg.Path, msg.Offset)
+		if err != nil {
+			fail(err)
+			return
+		}
+		defer f.Close()
+		result.Size = size
+		result.Offset = msg.Offset
+		serve, eof, truncated := fileops.RangeWindow(size, msg.Offset, msg.Length, msg.MaxSize, fileGetMaxBytes)
+		buf := make([]byte, fileGetChunkBytes)
+		var sent int64
+		for sent < serve {
+			chunk := int64(len(buf))
+			if r := serve - sent; r < chunk {
+				chunk = r
+			}
+			n, readErr := f.Read(buf[:chunk])
+			if n > 0 {
+				if emitErr := emitChunk(msg.Offset+sent, buf[:n]); emitErr != nil {
+					fail(fmt.Errorf("connection lost mid-read: %w", emitErr))
+					return
+				}
+				sent += int64(n)
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				fail(readErr)
+				return
+			}
+		}
+		result.OK = true
+		result.Returned = sent
+		result.EOF = eof || msg.Offset+sent >= size
+		result.Truncated = truncated
+		a.log.Info("file_get_request completed", "requestId", msg.RequestID, "path", msg.Path,
+			"offset", msg.Offset, "returned", sent, "size", size)
+		emitResult()
+		return
+	}
+
+	// Whole-file read: reject anything over the effective limit.
 	limit := fileGetMaxBytes
 	if msg.MaxSize > 0 && msg.MaxSize < limit {
 		limit = msg.MaxSize
 	}
-
 	f, size, err := fileops.OpenForRead(msg.Path, limit)
 	if err != nil {
-		fail(err.Error())
+		fail(err)
 		return
 	}
 	defer f.Close()
@@ -924,13 +983,8 @@ func (a *Agent) handleFileGetRequest(msg transport.FileGetRequest) {
 	for {
 		n, readErr := f.Read(buf)
 		if n > 0 {
-			if emitErr := a.transport.Emit("file_get_chunk", map[string]any{
-				"clientId":  a.cfg.ClientID,
-				"requestId": msg.RequestID,
-				"offset":    offset,
-				"data":      base64.StdEncoding.EncodeToString(buf[:n]),
-			}); emitErr != nil {
-				fail("connection lost mid-read: " + emitErr.Error())
+			if emitErr := emitChunk(offset, buf[:n]); emitErr != nil {
+				fail(fmt.Errorf("connection lost mid-read: %w", emitErr))
 				return
 			}
 			offset += int64(n)
@@ -939,17 +993,32 @@ func (a *Agent) handleFileGetRequest(msg transport.FileGetRequest) {
 			break
 		}
 		if readErr != nil {
-			fail(readErr.Error())
+			fail(readErr)
 			return
 		}
 	}
 
 	result.OK = true
-	result.Size = offset
-	_ = size // os.Stat size; offset is the authoritative bytes-sent count
+	result.Size = size
+	result.Returned = offset
+	result.EOF = true
 	a.log.Info("file_get_request completed", "requestId", msg.RequestID, "path", msg.Path, "size", offset)
-	if err := a.transport.Emit("file_get_result", result); err != nil {
-		a.log.Error("failed to emit file_get_result", "requestId", msg.RequestID, "error", err)
+	emitResult()
+}
+
+// fileGetErrorCode maps a read failure to a machine-readable error code.
+func fileGetErrorCode(err error) string {
+	switch {
+	case errors.Is(err, fileops.ErrIsDirectory):
+		return "is_dir"
+	case errors.Is(err, fileops.ErrFileTooLarge):
+		return "too_large"
+	case errors.Is(err, fileops.ErrHardDeny), os.IsPermission(err):
+		return "permission"
+	case os.IsNotExist(err):
+		return "not_found"
+	default:
+		return "io"
 	}
 }
 
