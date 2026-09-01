@@ -582,6 +582,35 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Trigger companion APK build
+        # The Android agent ships inside the companion APK and cannot update
+        # itself: it runs from nativeLibraryDir, which is read-only to the app.
+        # A new agent release is therefore only installable on phones once a
+        # matching APK exists, so ask the companion repo to build one.
+        #
+        # Deliberately placed before the webhook step: that step is allowed to
+        # fail the job, and a release that reaches this far should still reach
+        # phones. Skips cleanly when COMPANION_REPO / the token are unset.
+        if: |
+          vars.COMPANION_REPO != '' && (
+            (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+            (github.event_name == 'workflow_dispatch' && inputs.create_release == 'true')
+          )
+        env:
+          GH_TOKEN: ${{ secrets.COMPANION_DISPATCH_TOKEN }}
+          COMPANION_REPO: ${{ vars.COMPANION_REPO }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::COMPANION_DISPATCH_TOKEN not set; no companion APK will be built for $VERSION"
+            exit 0
+          fi
+          gh api "repos/${COMPANION_REPO}/dispatches" \
+            -f event_type=agent-release \
+            -f "client_payload[agent_version]=${VERSION}"
+          echo "Requested companion APK build for $VERSION in $COMPANION_REPO"
+
       - name: Notify control-plane webhook (version release)
         if: env.VERSION_RELEASE_WEBHOOK_SECRET != ''
         env:
