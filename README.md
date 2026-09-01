@@ -57,9 +57,16 @@ adb shell 'cd /data/local/tmp/backup-agent && \
 ```
 
 Set `telephony.enabled` plus the `companionToken` shown by the companion app
-(see `app/README.md`) to expose the phone's SMS to the control plane. Two
-telemetry sources degrade gracefully on an unrooted device: `/sys/class/thermal`
-is unreadable, and the Docker probe finds no daemon.
+(see `app/README.md`) to expose the phone's SMS to the control plane.
+
+Battery and thermal telemetry come from the companion app rather than sysfs.
+`battery_android.go` and `thermal_android.go` replace the sysfs collectors
+(which are excluded from the build via `linux && !android`) and read through
+`telemetry.SetHostProvider`, wired to the companion in `agent/internal/app`.
+This is not a fallback: an app-uid process cannot open `/sys/class/power_supply`
+or `/sys/class/thermal` on a stock device at all, so the companion is the only
+path to that data — and it yields more than sysfs would, including charge
+cycle count. The Docker probe still finds no daemon and degrades gracefully.
 
 ## Release Artifacts
 

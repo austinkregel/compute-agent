@@ -46,6 +46,16 @@ func (m *Manager) handleCompanionEvent(event string, payload map[string]any) {
 	}
 }
 
+// HostTelemetry fetches platform telemetry the agent cannot read for itself.
+//
+// On Android the agent runs inside the companion app's uid, which cannot open
+// /sys/class/power_supply or /sys/class/thermal. The app reads the same facts
+// through BatteryManager and PowerManager and returns them here, so battery
+// and thermal data survive the move onto a phone instead of being dropped.
+func (m *Manager) HostTelemetry(ctx context.Context) (any, error) {
+	return m.client.Request(ctx, "host.telemetry", map[string]any{})
+}
+
 // SendSMS sends a text message via the companion app.
 func (m *Manager) SendSMS(ctx context.Context, to, body string) (map[string]any, error) {
 	result, err := m.client.Request(ctx, "sms.send", map[string]any{"to": to, "body": body})

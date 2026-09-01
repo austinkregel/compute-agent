@@ -223,6 +223,12 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 			log.With("component", "telephony"),
 			t.Emit,
 		)
+
+		// Let the telemetry collectors pull battery/thermal from the companion
+		// app. On Android the sysfs collectors are compiled out entirely (an
+		// app uid cannot read them), so this is the only source of that data;
+		// on other platforms it is registered but never consulted.
+		telemetry.SetHostProvider(newCompanionHostProvider(agent.telephony, log.With("component", "telephony")))
 	}
 	agent.caps.Register(telephonyCap{enabled: cfg.Telephony.Enabled, mgr: agent.telephony})
 
