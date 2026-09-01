@@ -124,6 +124,79 @@ jobs:
           path: dist/backup-agent-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
           retention-days: 1
 
+  # Build the Android/arm64 binary for phone-class agents (with CGO, via the
+  # NDK preinstalled on GitHub's ubuntu runners). This target needs CGO for
+  # DNS: the CGO_ENABLED=0 resolver reads /etc/resolv.conf, which Android has
+  # no equivalent of, so hostname lookups fail. Linking bionic's resolver via
+  # the NDK makes the agent honour the device's real DNS.
+  build-android:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+            echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine build metadata
+        id: meta
+        run: |
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build android/arm64
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          BUILD_DATE: ${{ steps.meta.outputs.build_date }}
+          CGO_ENABLED: 1
+          GOOS: android
+          GOARCH: arm64
+          # API 26 matches the companion app's minSdk.
+          ANDROID_API: '26'
+        run: |
+          mkdir -p dist
+          NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
+            echo "::error::no Android NDK found on this runner"
+            exit 1
+          fi
+          export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang"
+          echo "using CC=$CC"
+          go build \
+            -trimpath \
+            -ldflags "-s -w \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
+              -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
+            -o "dist/backup-agent-android-arm64" \
+            ./cmd/agent
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-agent-android-arm64
+          path: dist/backup-agent-android-arm64
+          retention-days: 1
+
   # Build Linux kiosk binaries (with CGO for WebView support)
   build-linux-kiosk:
     needs: test
@@ -395,7 +468,7 @@ jobs:
 
   # Collect all binaries and create release
   release:
-    needs: [build-headless, build-linux-kiosk, build-linux-arm64-kiosk, build-macos-kiosk, build-windows-kiosk]
+    needs: [build-headless, build-android, build-linux-kiosk, build-linux-arm64-kiosk, build-macos-kiosk, build-windows-kiosk]
     runs-on: ubuntu-latest
     permissions:
       contents: write

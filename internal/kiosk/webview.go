@@ -1,4 +1,4 @@
-//go:build cgo && linux && !webkit_4_0
+//go:build cgo && linux && !android && !webkit_4_0
 
 package kiosk
 

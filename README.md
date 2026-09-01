@@ -19,9 +19,47 @@ cd agent
 make build          # builds ./dist/backup-agent with kiosk support (CGO_ENABLED=1)
 make build-headless # builds ./dist/backup-agent without kiosk (CGO_ENABLED=0)
 make build-all      # cross-compiles headless binaries for all supported targets
+make build-android  # android/arm64 for phone-class agents (needs NDK; see below)
 ```
 
 Build flags are configured in `Makefile`. Cross compilation uses `CGO_ENABLED=0`; for PTY support on macOS you may need Xcode command line tools installed.
+
+### Android (phone-class agents)
+
+`build-android` is the one target that needs CGO and a cross-compiler, so it is
+not part of `build-all`. Install the NDK once:
+
+```bash
+../app/setup-android-sdk.sh --with-ndk
+```
+
+CGO is needed for **DNS**, not for the kiosk WebView. With `CGO_ENABLED=0` Go
+uses its pure resolver, which reads `/etc/resolv.conf` — a file Android has no
+equivalent of. The agent then falls back to `127.0.0.1:53`, nothing is
+listening there, and every hostname lookup fails with
+`connection refused`. Building `GOOS=android` against the NDK links bionic's
+resolver, which queries netd and so honours the device's real DNS, including
+Wi-Fi, cellular, VPN and Private DNS.
+
+Because `GOOS=android` also satisfies Go's `linux` build tag, the GTK WebView
+files in `internal/kiosk` carry explicit `!android` guards; the kiosk stub is
+used on Android instead.
+
+Deploying without root (binaries may be executed from `/data/local/tmp`):
+
+```bash
+adb push dist/backup-agent-android-arm64 /data/local/tmp/backup-agent/backup-agent
+adb shell chmod 755 /data/local/tmp/backup-agent/backup-agent
+adb push agent-config.json /data/local/tmp/backup-agent/agent-config.json
+adb shell chmod 600 /data/local/tmp/backup-agent/agent-config.json
+adb shell 'cd /data/local/tmp/backup-agent && \
+  setsid ./backup-agent --config ./agent-config.json </dev/null >runtime.log 2>&1 &'
+```
+
+Set `telephony.enabled` plus the `companionToken` shown by the companion app
+(see `app/README.md`) to expose the phone's SMS to the control plane. Two
+telemetry sources degrade gracefully on an unrooted device: `/sys/class/thermal`
+is unreadable, and the Docker probe finds no daemon.
 
 ## Release Artifacts
 

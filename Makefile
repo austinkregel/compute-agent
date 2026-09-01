@@ -9,6 +9,23 @@ PLATFORMS = \
 	darwin/arm64 \
 	windows/amd64
 
+# Android (phone-class agents). Deliberately NOT in PLATFORMS: unlike every
+# other target this one needs CGO and an NDK cross-compiler, so it can't go
+# through the CGO_ENABLED=0 build-all loop.
+#
+# CGO is required for DNS, not for kiosk: with CGO_ENABLED=0 Go uses its pure
+# resolver, which reads /etc/resolv.conf — a file Android does not have. The
+# agent then falls back to 127.0.0.1:53, nothing is listening there, and every
+# hostname lookup fails. Building GOOS=android with the NDK links bionic's
+# resolver, which asks netd and so honours the device's real DNS (Wi-Fi,
+# cellular, VPN and Private DNS alike).
+ANDROID_SDK   ?= $(HOME)/Android/Sdk
+ANDROID_NDK   ?= $(ANDROID_SDK)/ndk/29.0.14206865
+# Minimum API level. 26 matches the companion app's minSdk (app/companion/build.gradle.kts).
+ANDROID_API   ?= 26
+ANDROID_HOST  ?= linux-x86_64
+ANDROID_CC     = $(ANDROID_NDK)/toolchains/llvm/prebuilt/$(ANDROID_HOST)/bin/aarch64-linux-android$(ANDROID_API)-clang
+
 # Build for host platform with kiosk support (requires CGO + platform deps)
 # Linux (Ubuntu 22.04+): apt install libgtk-3-dev libwebkit2gtk-4.1-dev
 # Linux (Ubuntu 20.04):  apt install libgtk-3-dev libwebkit2gtk-4.0-dev
@@ -45,6 +62,21 @@ build-all:
 		echo ">> building $${os}/$${arch} -> $${out}"; \
 		GOOS=$${os} GOARCH=$${arch} CGO_ENABLED=0 go build -o "$${out}" ./cmd/agent || exit $$?; \
 	done
+
+# Cross-compile for Android/arm64 (phone-class agents running under adb shell
+# or Termux). Requires the NDK: `app/setup-android-sdk.sh --with-ndk`.
+.PHONY: build-android
+build-android:
+	@if [ ! -x "$(ANDROID_CC)" ]; then \
+		echo "error: NDK compiler not found at $(ANDROID_CC)"; \
+		echo "       install it with: app/setup-android-sdk.sh --with-ndk"; \
+		echo "       or point ANDROID_NDK at an existing NDK install"; \
+		exit 1; \
+	fi
+	@mkdir -p $(BINDIR)
+	@echo ">> building android/arm64 -> $(BINDIR)/$(APP)-android-arm64"
+	CC="$(ANDROID_CC)" GOOS=android GOARCH=arm64 CGO_ENABLED=1 \
+		go build -trimpath -ldflags "-s -w" -o "$(BINDIR)/$(APP)-android-arm64" ./cmd/agent
 
 .PHONY: tidy
 tidy:
