@@ -193,6 +193,71 @@ Notes:
 
 The binary logs to stdout and to the file configured via `logging.file`. Service managers (systemd, supervisord, etc.) can run the binary directly with the desired config file.
 
+## Running in Docker
+
+The release workflow publishes `ghcr.io/austinkregel/compute-agent` for
+`linux/amd64`, `linux/arm64` and `linux/arm/v7`. Nothing needs to be configured
+on disk first — the entrypoint renders a config from environment variables:
+
+```bash
+docker run -d --name compute-agent --restart unless-stopped \
+  --network host --pid host \
+  -v compute-agent-data:/data \
+  -e SERVER_URL=wss://your-server/ws/agent \
+  -e AUTH_TOKEN=your-token \
+  -e CLIENT_ID=your-machine \
+  ghcr.io/austinkregel/compute-agent:latest
+```
+
+`--network host` and `--pid host` are what make the reported telemetry describe
+the *host* rather than the container. `CLIENT_ID` should be set explicitly:
+without it the agent falls back to the container hostname, which changes on
+every recreate and registers as a new machine in the fleet.
+
+A ready-made compose file lives at [`docker/compose.yaml`](docker/compose.yaml).
+
+### Configuration sources
+
+`docker/entrypoint.sh` picks a config in this order:
+
+| Source | When it wins |
+| --- | --- |
+| `AGENT_CONFIG_JSON` | Set — the value is a complete config document, written verbatim |
+| `/data/options.json` | Present — Home Assistant Supervisor options (the add-on path) |
+| `$CLIENT_CONFIG_PATH` | The file exists and this script did not write it |
+| Environment variables | Otherwise |
+
+A config the entrypoint generated is marked with a sibling `.generated` file, so
+changing an environment variable and restarting re-renders it, while a config
+you mounted yourself is never overwritten. Whichever source wins, the agent's
+own environment overrides (`SERVER_URL`, `AUTH_TOKEN`, `CLIENT_ID`,
+`STATS_INTERVAL_SEC`, … — see `applyEnvOverrides` in `pkg/config/config.go`)
+still apply on top.
+
+### Environment variables
+
+`SERVER_URL` and `AUTH_TOKEN` are required. Beyond the ones the agent itself
+reads, the entrypoint understands `LOG_LEVEL`, `TRANSPORT_PATH`,
+`MAX_CLOCK_SKEW_SEC`, `ENABLE_SHELL`, `SHELL_IDLE_TIMEOUT_SEC`,
+`ADMIN_ALLOWED_CWDS`, `ADMIN_MAX_CONCURRENT`, `ADMIN_DEFAULT_TIMEOUT_SEC`,
+`REQUIRE_COMMAND_TOKEN`, `COMMAND_TOKEN`, `ENABLE_ALERTS`,
+`ALERTS_SCAN_INTERVAL_SEC`, `BACKUP_SOURCE_ROOTS`, `BACKUP_DEST_ROOTS` and
+`DIRBROWSE_ROOTS` (the last three are comma-separated lists).
+
+File access defaults deliberately narrow: only `/data`, plus `/host` when the
+host filesystem is mounted there (`-v /:/host:ro`). Widen it explicitly rather
+than by mounting more into the container.
+
+Self-update is disabled in the container: the binary lives in a read-only image
+layer, so a new agent version arrives as a new image.
+
+### Home Assistant
+
+The [`ha-compute-agent`](https://github.com/austinkregel/ha-compute-agent)
+add-on is this same image — the Supervisor writes `/data/options.json` and the
+entrypoint renders it, mapping the add-on's volumes (`/homeassistant`, `/ssl`,
+`/media`, `/backup`, `/share`) into the backup and directory-browse roots.
+
 ## Kiosk Mode
 
 Kiosk mode enables the agent to display a fullscreen window that can be controlled remotely from the dashboard. This is useful for digital signage, status displays, or interactive kiosks.
@@ -258,7 +323,7 @@ The kiosk status indicator shows:
 
 ## Packaging
 
-- **Docker**: `Dockerfile.agent` builds a minimal image that copies the Go binary.
+- **Docker**: `Dockerfile` builds the published `ghcr.io/austinkregel/compute-agent` image (see [Running in Docker](#running-in-docker)); `make docker-build` builds it locally.
 - **Install/update scripts**: `install.sh` and `update-manager.sh` now target the Go binary (see repo root).
 - **pkg**: not required; the Go binary is already single-file. Use `make build-all` for release artifacts.
 

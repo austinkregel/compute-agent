@@ -1,0 +1,9 @@
+# Keep the build context to what `go build ./cmd/agent` actually needs.
+.git
+.github
+dist
+docs
+*.md
+agent-config.json
+*.log
+*.db

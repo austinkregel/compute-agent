@@ -24,3 +24,52 @@ jobs:
 
       - name: Run tests
         run: make test
+
+  # The release workflow publishes this image, so a broken Dockerfile or
+  # entrypoint should fail here rather than at tag time. amd64 only and no
+  # push: this is a compile check, not a publish.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: compute-agent:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Smoke-test the entrypoint's two config sources: environment variables
+      # (plain Docker) and /data/options.json (Home Assistant Supervisor).
+      - name: Entrypoint renders a config
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e SERVER_URL=wss://example.invalid/ws/agent \
+            -e AUTH_TOKEN=ci-token \
+            -e CLIENT_ID=ci-agent \
+            --entrypoint /usr/local/bin/entrypoint.sh compute-agent:ci \
+            bash -c 'jq -e ".clientId == \"ci-agent\" and .serverUrl == \"wss://example.invalid/ws/agent\"" /data/agent-config.json'
+
+          mkdir -p /tmp/hadata
+          echo '{"server_url":"wss://ha.invalid/ws/agent","auth_token":"ci","client_id":"ci-ha"}' > /tmp/hadata/options.json
+          docker run --rm -v /tmp/hadata:/data \
+            --entrypoint /usr/local/bin/entrypoint.sh compute-agent:ci \
+            bash -c 'jq -e ".clientId == \"ci-ha\" and (.backup.allowedSourceRoots | index(\"/homeassistant\"))" /data/agent-config.json'
+
+      - name: Agent rejects a run with no configuration
+        run: |
+          if docker run --rm compute-agent:ci; then
+            echo "::error::agent started without SERVER_URL/AUTH_TOKEN"
+            exit 1
+          fi

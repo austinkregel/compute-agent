@@ -78,6 +78,20 @@ build-android:
 	CC="$(ANDROID_CC)" GOOS=android GOARCH=arm64 CGO_ENABLED=1 \
 		go build -trimpath -ldflags "-s -w" -o "$(BINDIR)/$(APP)-android-arm64" ./cmd/agent
 
+# Container image (what the release workflow publishes as
+# ghcr.io/austinkregel/compute-agent). Single-arch, for local testing; the
+# multi-arch manifest is built by .github/workflows/release.yml.
+IMAGE ?= ghcr.io/austinkregel/compute-agent
+TAG   ?= dev
+
+.PHONY: docker-build
+docker-build:
+	docker build \
+		--build-arg VERSION=$(TAG) \
+		--build-arg COMMIT=$$(git rev-parse HEAD 2>/dev/null || echo unknown) \
+		--build-arg BUILD_DATE=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+		-t $(IMAGE):$(TAG) .
+
 .PHONY: tidy
 tidy:
 	go mod tidy

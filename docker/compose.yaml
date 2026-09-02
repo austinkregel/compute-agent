@@ -1,0 +1,29 @@
+# Minimal compute-agent deployment. Copy, set the three variables, `docker
+# compose up -d`, and the machine appears in the dashboard's fleet roster.
+services:
+  compute-agent:
+    image: ghcr.io/austinkregel/compute-agent:latest
+    container_name: compute-agent
+    restart: unless-stopped
+    # Host namespaces are what make the reported telemetry describe the host
+    # rather than the container (process list, network interfaces, load).
+    network_mode: host
+    pid: host
+    environment:
+      SERVER_URL: ${SERVER_URL:?set SERVER_URL, e.g. wss://your-server/ws/agent}
+      AUTH_TOKEN: ${AUTH_TOKEN:?set AUTH_TOKEN to the control plane's agent token}
+      # Set this explicitly — the fallback is the container hostname, which
+      # changes on every recreate and registers as a new machine.
+      CLIENT_ID: ${CLIENT_ID:?set CLIENT_ID to a stable name for this machine}
+      LOG_LEVEL: info
+    volumes:
+      # Rendered config, agent log, and agent state.
+      - compute-agent-data:/data
+      # Optional: Docker/Swarm inventory. Read-only; the agent never writes here.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Optional: host filesystem for backups and directory browsing. Mounting
+      # it also widens the agent's default file roots to include /host.
+      # - /:/host:ro
+
+volumes:
+  compute-agent-data:
