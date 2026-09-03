@@ -244,8 +244,10 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 				"hint", "use the kiosk variant binary (-kiosk) or rebuild with CGO_ENABLED=1")
 		} else {
 			kioskMgr, err := kiosk.New(kiosk.Config{
-				ListenAddr: cfg.Kiosk.ListenAddr,
-				Fullscreen: cfg.Kiosk.Fullscreen,
+				ListenAddr:    cfg.Kiosk.ListenAddr,
+				Fullscreen:    cfg.Kiosk.Fullscreen,
+				DefaultKind:   cfg.Kiosk.DefaultKind,
+				DefaultLayout: cfg.Kiosk.DefaultLayout,
 			}, log.With("component", "kiosk"), agent.handleKioskStatus, ".")
 			if err != nil {
 				log.Error("kiosk initialization failed", "error", err,

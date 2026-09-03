@@ -50,7 +50,8 @@ type manager struct {
 	listener net.Listener
 	server   *http.Server
 
-	layoutStore *LayoutStore
+	layoutStore  *LayoutStore
+	contentStore *ContentStore
 }
 
 // New creates a kiosk manager.
@@ -73,14 +74,48 @@ func New(cfg Config, log *logging.Logger, onStatus StatusFunc, dataDir string) (
 		log.Warn("failed to load kiosk layouts, using defaults", "error", err)
 	}
 
+	// Resume the content the kiosk was last showing. Without this every agent
+	// restart silently drops back to the default view, discarding whatever the
+	// operator selected from the dashboard.
+	contentStore := NewContentStore(dataDir)
+	content, restored := contentStore.Load()
+	if restored {
+		log.Info("restored kiosk content from previous run", "kind", content.Kind, "layout", content.Layout)
+	} else {
+		content = defaultContent(cfg, store)
+		log.Info("no persisted kiosk content; using default", "kind", content.Kind, "layout", content.Layout)
+	}
+
 	return &manager{
-		cfg:         cfg,
-		log:         log,
-		onStatus:    onStatus,
-		content:     Content{Kind: "dashboard"},
-		token:       token,
-		layoutStore: store,
+		cfg:          cfg,
+		log:          log,
+		onStatus:     onStatus,
+		content:      content,
+		token:        token,
+		layoutStore:  store,
+		contentStore: contentStore,
 	}, nil
+}
+
+// defaultContent resolves what a kiosk shows on a cold start, when no content
+// was persisted by a previous run.
+func defaultContent(cfg Config, store *LayoutStore) Content {
+	switch cfg.DefaultKind {
+	case "blank":
+		return Content{Kind: "blank"}
+	case "dashboard":
+		return Content{Kind: "dashboard"}
+	}
+
+	name := cfg.DefaultLayout
+	if name == "" {
+		name = DefaultLayoutName
+	}
+	layout, ok := store.Get(name)
+	if !ok {
+		return Content{Kind: "dashboard"}
+	}
+	return Content{Kind: "page", Layout: name, Widgets: layout.Widgets, Units: layout.Units}
 }
 
 func (m *manager) Run(ctx context.Context) error {
@@ -246,6 +281,8 @@ func (m *manager) SetContent(c Content) error {
 	wasURL := m.content.Kind == "url"
 	m.content = c
 	m.mu.Unlock()
+
+	m.persistContent(c)
 
 	switch {
 	case c.Kind == "url":
@@ -415,10 +452,27 @@ func (m *manager) SaveLayout(name string, layout PageLayout) error {
 	if active {
 		m.mu.Lock()
 		m.content.Widgets = layout.Widgets
+		if layout.Units != "" {
+			m.content.Units = layout.Units
+		}
+		updated := m.content
 		m.mu.Unlock()
+		m.persistContent(updated)
 		m.pushContent()
 	}
 	return nil
+}
+
+// persistContent records the active content so the next agent start resumes it.
+// A write failure is not fatal — the kiosk keeps displaying what was asked for,
+// it just will not survive a restart.
+func (m *manager) persistContent(c Content) {
+	if m.contentStore == nil {
+		return
+	}
+	if err := m.contentStore.Save(c); err != nil {
+		m.log.Warn("failed to persist kiosk content", "error", err, "kind", c.Kind)
+	}
 }
 
 func (m *manager) GetLayouts() map[string]PageLayout {

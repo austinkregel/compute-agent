@@ -290,7 +290,9 @@ Add the kiosk configuration to `agent-config.json`:
   "kiosk": {
     "enabled": true,
     "listenAddr": "127.0.0.1:0",
-    "fullscreen": true
+    "fullscreen": true,
+    "defaultKind": "page",
+    "defaultLayout": "system"
   }
 }
 ```
@@ -300,6 +302,20 @@ Add the kiosk configuration to `agent-config.json`:
 | `enabled` | `false` | Enable kiosk mode |
 | `listenAddr` | `127.0.0.1:0` | Local HTTP/WS server address (ephemeral port by default) |
 | `fullscreen` | `true` | Open window in fullscreen mode |
+| `defaultKind` | `page` | What to display on a cold start: `page`, `dashboard`, or `blank` |
+| `defaultLayout` | `system` | Page layout used when `defaultKind` is `page` |
+
+### What the kiosk shows across restarts
+
+The active content is persisted to `kiosk-content.json` next to `kiosk-layouts.json`,
+so restarting the agent resumes whatever was last set from the dashboard rather than
+reverting to a default. `defaultKind`/`defaultLayout` apply only on a cold start —
+a first run, or after that file is deleted or becomes unreadable.
+
+The built-in `system` layout is a 3x2 grid of host telemetry — CPU, memory, battery,
+disk, network, and system health — and reaches nothing outside the machine. The other
+built-in presets (`ultrawide`, `wide`, `classic`) include widgets that fetch weather,
+news, and crypto data over the public internet.
 
 ### Dashboard Control
 

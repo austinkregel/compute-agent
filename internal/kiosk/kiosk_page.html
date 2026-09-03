@@ -241,6 +241,15 @@
         .wc-val { font-size: 2rem; font-weight: 600; color: #f1f5f9; }
         .wc-sub { font-size: 1rem; color: #94a3b8; margin-top: 0.25rem; }
         .wc-row { display: flex; align-items: center; gap: 0.75rem; }
+        /* Single-metric stat widgets (cpu, memory, battery, disk, network, system-health) */
+        .stat-hero { display: flex; align-items: center; justify-content: center; margin-bottom: 0.5rem; }
+        .stat-big { font-size: clamp(2.25rem, 5vw, 4rem); font-weight: 600; color: #f1f5f9; line-height: 1.1; text-align: center; margin-bottom: 0.75rem; }
+        .stat-big-unit { font-size: 0.45em; font-weight: 400; color: #94a3b8; margin-left: 0.125em; }
+        .stat-kv { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.375rem 0; border-bottom: 1px solid #334155; font-size: clamp(0.8125rem, 1vw, 1.0625rem); }
+        .stat-kv:last-child { border-bottom: none; }
+        .stat-kv > span:first-child { color: #94a3b8; white-space: nowrap; }
+        .stat-kv > span:last-child { color: #cbd5e1; text-align: right; overflow: hidden; text-overflow: ellipsis; }
+        .stat-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: #475569; font-size: clamp(0.875rem, 1.1vw, 1.125rem); }
         .wc-green { color: #22c55e; }
         .wc-red { color: #ef4444; }
         .wc-yellow { color: #eab308; }
@@ -513,6 +522,12 @@
         const WIDGETS = {
             'stats-primary': { label: 'System Stats', init: initStatsPrimary, update: updateStatsPrimary },
             'stats-secondary': { label: 'Disk / Network', init: initStatsSecondary, update: updateStatsSecondary },
+            'cpu': { label: 'CPU', init: initStatWidget, update: updateCPUWidget },
+            'memory': { label: 'Memory', init: initStatWidget, update: updateMemoryWidget },
+            'battery': { label: 'Battery', init: initStatWidget, update: updateBatteryWidget },
+            'disk': { label: 'Disk', init: initStatWidget, update: updateDiskWidget },
+            'network': { label: 'Network', init: initStatWidget, update: updateNetworkWidget },
+            'system-health': { label: 'System Health', init: initStatWidget, update: updateSystemHealthWidget },
             'weather-current': { label: 'Weather', init: initWeatherCurrent },
             'weather-forecast': { label: '7-Day Forecast', init: initWeatherForecast },
             'clock-calendar': { label: 'Clock / Calendar', init: initClockCalendar },
@@ -598,6 +613,101 @@
             if (s.netIfaces && s.netIfaces.length > 0) { h += '<div style="margin-top:0.75rem;border-top:1px solid #334155;padding-top:0.75rem">'; for (const n of s.netIfaces.slice(0,4)) { h += `<div class="net-row"><span class="net-name">${esc(n.name)}</span><span class="net-addr">${esc(n.address)}</span></div>`; } h += '</div>'; }
             if (s.thermal && s.thermal.length > 0) { const chips = s.thermal.filter(t=>t.temperature>0).slice(0,4).map(t=>`<div class="thermal-chip"><span class="thermal-chip-name">${esc(t.label||t.sensorKey||'?')}</span><span class="thermal-chip-val">${t.temperature.toFixed(0)}\u00B0C</span></div>`).join(''); if (chips) h += `<div style="margin-top:0.75rem;border-top:1px solid #334155;padding-top:0.75rem"><div class="thermal-list">${chips}</div></div>`; }
             inst.el.innerHTML = h || '<div class="wc-sub">No data</div>';
+        }
+
+        // ══════════════════════════════════════════════════
+        // ── Single-metric stat widgets (the "system" preset) ──
+        // Each fills one grid cell with one facet of host telemetry, so an
+        // operator can compose a wall display from the pieces they care about
+        // instead of the two combined stats cards.
+        // ══════════════════════════════════════════════════
+
+        function initStatWidget(inst) { inst.el.innerHTML = '<div class="wc-sub">Waiting for stats\u2026</div>'; }
+        function statEmpty(msg) { return `<div class="stat-empty">${esc(msg)}</div>`; }
+
+        // ── Widget: cpu ──
+        function updateCPUWidget(inst, s) {
+            const pct = Math.round(s.cpu || 0);
+            const sz = 'min(170px, 26vh)';
+            let h = `<div class="stat-hero"><div class="ring-gauge" style="width:${sz};height:${sz}"><svg viewBox="0 0 100 100" style="width:100%;height:100%"><circle class="ring-bg" cx="50" cy="50" r="42"/><circle class="ring-fill" cx="50" cy="50" r="42" stroke="${ringColor(pct)}" stroke-dasharray="${2*Math.PI*42}" stroke-dashoffset="${2*Math.PI*42*(1-pct/100)}"/></svg><div class="ring-label" style="font-size:clamp(1.5rem,3vw,2.25rem)">${pct}%</div></div></div>`;
+            h += `<div class="wc-sub" style="text-align:center">${s.cpus || '\u2014'} cores</div>`;
+            if (s.load) h += `<div class="load-row" style="justify-content:center;margin-top:0.75rem"><div class="load-item"><div class="load-value">${s.load.load1?.toFixed(2) ?? '\u2014'}</div><div class="load-label">1 min</div></div><div class="load-item"><div class="load-value">${s.load.load5?.toFixed(2) ?? '\u2014'}</div><div class="load-label">5 min</div></div><div class="load-item"><div class="load-value">${s.load.load15?.toFixed(2) ?? '\u2014'}</div><div class="load-label">15 min</div></div></div>`;
+            inst.el.innerHTML = h;
+        }
+
+        // ── Widget: memory ──
+        function updateMemoryWidget(inst, s) {
+            if (!s.mem) { inst.el.innerHTML = statEmpty('No memory data'); return; }
+            const pct = s.mem.total ? Math.round(s.mem.used / s.mem.total * 100) : 0;
+            let h = `<div class="stat-big" style="color:${ringColor(pct)}">${pct}<span class="stat-big-unit">%</span></div>`;
+            h += `<div class="gauge-track" style="height:12px"><div class="gauge-fill ${gaugeColor(pct)}" style="width:${pct}%"></div></div>`;
+            h += `<div class="stat-kv"><span>Used</span><span>${fmtBytes(s.mem.used)}</span></div>`;
+            h += `<div class="stat-kv"><span>Free</span><span>${fmtBytes(s.mem.free)}</span></div>`;
+            h += `<div class="stat-kv"><span>Total</span><span>${fmtBytes(s.mem.total)}</span></div>`;
+            inst.el.innerHTML = h;
+        }
+
+        // ── Widget: battery ──
+        function updateBatteryWidget(inst, s) {
+            const dev = s.battery && s.battery.devices && s.battery.devices.length > 0 ? s.battery.devices[0] : null;
+            if (!dev) { inst.el.innerHTML = statEmpty('No battery on this host'); return; }
+            const pct = Math.round(dev.percent || 0);
+            const color = pct > 50 ? '#22c55e' : pct > 20 ? '#eab308' : '#ef4444';
+            const charging = dev.status === 'charging';
+            let h = `<div class="stat-big" style="color:${color}">${pct}<span class="stat-big-unit">%</span>${charging ? ' \u26A1' : ''}</div>`;
+            h += `<div class="battery-shell" style="justify-content:center;width:100%;margin-bottom:0.75rem"><div class="battery-icon" style="width:72px;height:32px"><div class="battery-level" style="width:${pct}%;background:${color}"></div></div></div>`;
+            h += `<div class="stat-kv"><span>Status</span><span>${esc(cap(dev.status || 'unknown'))}</span></div>`;
+            const remaining = charging ? dev.timeToFullSec : dev.timeToEmptySec;
+            if (remaining > 0) h += `<div class="stat-kv"><span>${charging ? 'Until full' : 'Remaining'}</span><span>${fmtUptime(remaining)}</span></div>`;
+            if (dev.powerNowW > 0) h += `<div class="stat-kv"><span>Draw</span><span>${dev.powerNowW.toFixed(1)} W</span></div>`;
+            if (dev.tempC > 0) h += `<div class="stat-kv"><span>Temp</span><span>${dev.tempC.toFixed(0)}\u00B0C</span></div>`;
+            inst.el.innerHTML = h;
+        }
+
+        // ── Widget: disk ──
+        function updateDiskWidget(inst, s) {
+            if (!s.disk || s.disk.length === 0) { inst.el.innerHTML = statEmpty('No disk data'); return; }
+            let h = '';
+            for (const d of s.disk.slice(0, 8)) {
+                const p = Math.round(d.capacity || 0);
+                h += `<div style="margin-bottom:0.75rem"><div class="stat-kv" style="border:none;padding-bottom:0.25rem"><span title="${esc(d.fsName || '')}">${esc(d.mount)}</span><span>${p}% \u00B7 ${fmtBytes(d.avail)} free</span></div><div class="gauge-track"><div class="gauge-fill ${gaugeColor(p)}" style="width:${p}%"></div></div></div>`;
+            }
+            inst.el.innerHTML = h;
+        }
+
+        // ── Widget: network ──
+        function updateNetworkWidget(inst, s) {
+            if (!s.netIfaces || s.netIfaces.length === 0) { inst.el.innerHTML = statEmpty('No network data'); return; }
+            // External interfaces first — on a kiosk wall the routable address is
+            // what an operator is actually looking for.
+            const ifaces = s.netIfaces.slice().sort((a, b) => (a.internal === b.internal) ? 0 : (a.internal ? 1 : -1));
+            let h = '<div class="net-list">';
+            for (const n of ifaces.slice(0, 8)) {
+                h += `<div class="net-row"><span class="net-name">${esc(n.name)}${n.internal ? ' <span style="color:#475569">(lo)</span>' : ''}</span><span class="net-addr">${esc(n.cidr || n.address)}</span></div>`;
+            }
+            h += '</div>';
+            inst.el.innerHTML = h;
+        }
+
+        // ── Widget: system-health ──
+        function updateSystemHealthWidget(inst, s) {
+            const rows = [];
+            if (s.hostname) rows.push({ label: 'Host', value: s.hostname });
+            if (s.uptimeSec) rows.push({ label: 'Uptime', value: fmtUptime(s.uptimeSec) });
+            if (s.securityPatchStatus) rows.push({ label: 'Patches', value: s.securityPatchStatus });
+            if (s.timeSyncStatus) rows.push({ label: 'NTP Sync', value: s.timeSyncStatus });
+            if (s.serviceHealth) {
+                const sh = s.serviceHealth;
+                rows.push({
+                    label: 'Services',
+                    value: `${sh.running}/${sh.total} running` + (sh.failed > 0 ? ` (${sh.failed} failed)` : ''),
+                    bad: sh.failed > 0,
+                });
+            }
+            if (s.lastReboot) { const d = new Date(s.lastReboot); rows.push({ label: 'Last Reboot', value: d.toLocaleDateString() + ' ' + d.toLocaleTimeString() }); }
+            if (s.alerts && s.alerts.alerts && s.alerts.alerts.length > 0) rows.push({ label: 'Alerts', value: String(s.alerts.alerts.length), bad: true });
+            if (rows.length === 0) { inst.el.innerHTML = statEmpty('No health data'); return; }
+            inst.el.innerHTML = rows.map(r => `<div class="stat-kv"><span>${esc(r.label)}</span><span style="${r.bad ? 'color:#ef4444' : ''}">${esc(r.value)}</span></div>`).join('');
         }
 
         // ── Widget: weather-current (hero card) ──

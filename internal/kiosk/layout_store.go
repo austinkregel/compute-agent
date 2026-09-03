@@ -9,7 +9,12 @@ import (
 	"sync"
 )
 
+// DefaultLayoutName is the layout a kiosk falls back to on a cold start: a
+// 3x2 grid of host telemetry, with no widget that reaches the public internet.
+const DefaultLayoutName = "system"
+
 var builtinPresets = map[string]bool{
+	"system":    true,
 	"ultrawide": true,
 	"wide":      true,
 	"classic":   true,
@@ -146,6 +151,17 @@ func (s *LayoutStore) writeLocked() error {
 
 func defaultLayouts() map[string]PageLayout {
 	return map[string]PageLayout{
+		DefaultLayoutName: {
+			Cols: 3, Rows: 2,
+			Widgets: []WidgetPlacement{
+				{Type: "cpu", Col: 1, Row: 1, W: 1, H: 1},
+				{Type: "memory", Col: 2, Row: 1, W: 1, H: 1},
+				{Type: "battery", Col: 3, Row: 1, W: 1, H: 1},
+				{Type: "disk", Col: 1, Row: 2, W: 1, H: 1},
+				{Type: "network", Col: 2, Row: 2, W: 1, H: 1},
+				{Type: "system-health", Col: 3, Row: 2, W: 1, H: 1},
+			},
+		},
 		"ultrawide": {
 			Cols: 5, Rows: 3,
 			Widgets: []WidgetPlacement{

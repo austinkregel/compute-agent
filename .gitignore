@@ -73,3 +73,6 @@ $RECYCLE.BIN/
 vendor/
 dist/*
 coverage.*
+### Kiosk runtime state ###
+kiosk-layouts.json
+kiosk-content.json

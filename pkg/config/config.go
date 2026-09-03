@@ -123,6 +123,14 @@ type KioskConfig struct {
 	ListenAddr string `json:"listenAddr"`
 	// Fullscreen opens the WebView in fullscreen mode (default true).
 	Fullscreen bool `json:"fullscreen"`
+	// DefaultKind is what the kiosk displays on a cold start, before any
+	// dashboard has set content and when no content was persisted by a
+	// previous run: "page" (default), "dashboard", or "blank".
+	DefaultKind string `json:"defaultKind"`
+	// DefaultLayout names the page layout used when DefaultKind is "page".
+	// Defaults to "system" — a 3x2 grid of CPU, memory, battery, disk,
+	// network, and system health.
+	DefaultLayout string `json:"defaultLayout"`
 }
 
 // AgentVariant specifies which binary variant is running or desired.
@@ -372,7 +380,9 @@ func defaultConfig() Config {
 			SMBProfiles:      map[string]SMBProfile{},
 		},
 		Kiosk: KioskConfig{
-			ListenAddr: "127.0.0.1:0",
+			ListenAddr:    "127.0.0.1:0",
+			DefaultKind:   "page",
+			DefaultLayout: "system",
 		},
 		DirectMode: DirectModeConfig{
 			MaxConns:       4,

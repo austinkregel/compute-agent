@@ -59,6 +59,12 @@ func navigateWebView(url string) {
 var ValidWidgetTypes = map[string]bool{
 	"stats-primary":    true,
 	"stats-secondary":  true,
+	"cpu":              true,
+	"memory":           true,
+	"battery":          true,
+	"disk":             true,
+	"network":          true,
+	"system-health":    true,
 	"weather-current":  true,
 	"weather-forecast": true,
 	"clock-calendar":   true,
@@ -164,6 +170,13 @@ type StatusFunc func(Status)
 type Config struct {
 	ListenAddr string
 	Fullscreen bool
+	// DefaultKind is the content kind a kiosk shows on a cold start, when no
+	// content has been persisted by a previous run: "page" (the default),
+	// "dashboard", or "blank".
+	DefaultKind string
+	// DefaultLayout names the page layout used when DefaultKind is "page".
+	// Defaults to DefaultLayoutName.
+	DefaultLayout string
 }
 
 // PageLayout holds the grid dimensions and widget placements for a kiosk page layout.
