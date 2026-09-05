@@ -22,7 +22,7 @@ type Config struct {
 	UpdateCheckIntervalHours int    `json:"updateCheckIntervalHours"`
 	OpenHardwareMonitorPort  int    `json:"openHardwareMonitorPort"`
 	// PongTimeoutSec controls when the agent should send proactive pings if idle.
-	// See requirements.md: pongTimeoutSec is 90s by default.
+	// The agent pings once traffic has been quiet for more than half this value.
 	PongTimeoutSec int                `json:"pongTimeoutSec"`
 	Connectivity   ConnectivityConfig `json:"connectivity"`
 	Admin          AdminConfig        `json:"admin"`
