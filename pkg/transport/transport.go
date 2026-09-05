@@ -179,7 +179,7 @@ type BackupRequest struct {
 }
 
 // DirListRequest asks the agent to list a single directory (local or remote).
-// See working_plan.md (RFC-0002).
+// See docs/RFC-0002-directory-browsing.md.
 type DirListRequest struct {
 	ClientID  string `json:"clientId"`
 	RequestID string `json:"requestId"`
@@ -1257,10 +1257,10 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 			c.handlers.KioskGetLayouts(msg)
 		}
 
-	case "swarm_info_request":
+	case "swarm_info":
 		var msg SwarmInfoRequest
 		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("unmarshal swarm_info_request", "error", err)
+			c.log.Error("unmarshal swarm_info", "error", err)
 			return
 		}
 		if c.handlers.SwarmInfo != nil {
