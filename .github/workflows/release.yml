@@ -569,12 +569,26 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist/binaries
+          # Only the build jobs' binaries. Without a pattern this also tries to
+          # download the `*.dockerbuild` build record that docker/build-push-action
+          # uploads, which fails ("Artifact download failed after 5 retries") and
+          # takes the whole release job — and therefore every release asset — with
+          # it. That is what silently stopped agents self-updating after v0.0.51.
+          pattern: backup-agent-*
 
       - name: Organize binaries
         run: |
+          set -euo pipefail
           mkdir -p dist/release
           # Move all binaries to a flat structure
           find dist/binaries -type f -name 'backup-agent-*' -exec mv {} dist/ \;
+          count=$(find dist -maxdepth 1 -type f -name 'backup-agent-*' | wc -l)
+          echo "collected $count binaries:"
+          find dist -maxdepth 1 -type f -name 'backup-agent-*' -printf '  %f\n' | sort
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no agent binaries were downloaded; refusing to publish an assetless release"
+            exit 1
+          fi
 
       - name: Create release archive
         run: |
@@ -700,6 +714,7 @@ jobs:
           echo "Requested companion APK build for $VERSION in $COMPANION_REPO"
 
       - name: Notify control-plane webhook (version release)
+        continue-on-error: true
         if: env.VERSION_RELEASE_WEBHOOK_SECRET != ''
         env:
           WEBHOOK_URL: ${{ env.VERSION_RELEASE_WEBHOOK_URL }}
