@@ -1071,7 +1071,16 @@ func TestDispatchSignedCommand_AllEvents(t *testing.T) {
 		"file_put_start", "file_put_chunk", "file_put_finish",
 		"file_delete_request", "file_chmod_request",
 		"file_mkdir_request", "file_rename_request",
-		"kiosk_set",
+		"kiosk_set", "kiosk_save_layout", "kiosk_get_layouts", "exec_cancel",
+		// Docker/Swarm. The control plane derives these names by stripping the
+		// "_request" suffix from the dashboard event, so the agent must
+		// dispatch on the bare name -- pinned here to stop the two planes
+		// drifting apart again.
+		"swarm_info", "swarm_init", "swarm_join", "swarm_leave",
+		"swarm_node_list", "swarm_service_list", "swarm_service_logs",
+		"swarm_network_list", "swarm_stack_list",
+		"container_inventory", "container_logs", "stack_status",
+		"compose_scan", "compose_parse",
 		"sms_send", "sms_thread_request", "sms_messages_request",
 	}
 
@@ -1132,6 +1141,40 @@ func TestDispatchSignedCommand_AllEvents(t *testing.T) {
 				handlers.FileRename = func(FileRenameRequest) { mu.Lock(); called = true; mu.Unlock() }
 			case "kiosk_set":
 				handlers.KioskSet = func(KioskSetRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "kiosk_save_layout":
+				handlers.KioskSaveLayout = func(KioskSaveLayoutRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "kiosk_get_layouts":
+				handlers.KioskGetLayouts = func(KioskGetLayoutsRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "exec_cancel":
+				handlers.ExecCancel = func(ExecCancelRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "swarm_info":
+				handlers.SwarmInfo = func(SwarmInfoRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "swarm_init":
+				handlers.SwarmInit = func(SwarmInitRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "swarm_join":
+				handlers.SwarmJoin = func(SwarmJoinRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "swarm_leave":
+				handlers.SwarmLeave = func(SwarmLeaveRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "swarm_node_list":
+				handlers.SwarmNodeList = func(SwarmNodeListRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "swarm_service_list":
+				handlers.SwarmServiceList = func(SwarmServiceListRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "swarm_service_logs":
+				handlers.SwarmServiceLogs = func(SwarmServiceLogsRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "swarm_network_list":
+				handlers.SwarmNetworkList = func(SwarmNetworkListRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "swarm_stack_list":
+				handlers.SwarmStackList = func(SwarmStackListRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "container_inventory":
+				handlers.ContainerInventory = func(ContainerInventoryRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "container_logs":
+				handlers.ContainerLogs = func(ContainerLogsRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "stack_status":
+				handlers.StackStatus = func(StackStatusRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "compose_scan":
+				handlers.ComposeScan = func(ComposeScanRequest) { mu.Lock(); called = true; mu.Unlock() }
+			case "compose_parse":
+				handlers.ComposeParse = func(ComposeParseRequest) { mu.Lock(); called = true; mu.Unlock() }
 			case "sms_send":
 				handlers.SMSSend = func(SMSSendRequest) { mu.Lock(); called = true; mu.Unlock() }
 			case "sms_thread_request":
