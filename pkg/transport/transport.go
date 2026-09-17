@@ -765,6 +765,13 @@ func (c *Client) dispatchMessage(msg Message) {
 		c.log.Debug("recv event", "event", "ping", "ts", ping.TS)
 		_ = c.Emit("pong", map[string]int64{"ts": ping.TS})
 
+	case "pong":
+		// The server's reply to our own proactive ping. readLoop already
+		// recorded the traffic, so there is nothing left to do — but this case
+		// has to exist, or a healthy keepalive reply falls through to the
+		// unsigned-event branch below and is logged as a rejected command.
+		c.log.Debug("recv event", "event", "pong")
+
 	case "signed_command":
 		var envelope cmdsig.SignedEnvelope
 		if err := json.Unmarshal(msg.Data, &envelope); err != nil {
