@@ -38,7 +38,7 @@ func TestSha256FileHex(t *testing.T) {
 }
 
 func TestExpectedBinaryName(t *testing.T) {
-	want := "backup-agent-" + runtime.GOOS + "-" + runtime.GOARCH
+	want := "compute-agent-" + runtime.GOOS + "-" + runtime.GOARCH
 	if runtime.GOOS == "windows" {
 		want += ".exe"
 	}
@@ -49,7 +49,7 @@ func TestExpectedBinaryName(t *testing.T) {
 
 func TestVerifyArchiveChecksum_Success(t *testing.T) {
 	tmp := t.TempDir()
-	archiveName := "backup-agent-test.tar.gz"
+	archiveName := "compute-agent-test.tar.gz"
 	archivePath := filepath.Join(tmp, archiveName)
 	archiveData := []byte("dummy archive content")
 	if err := os.WriteFile(archivePath, archiveData, 0o600); err != nil {
@@ -71,7 +71,7 @@ func TestVerifyArchiveChecksum_Success(t *testing.T) {
 
 func TestVerifyArchiveChecksum_MissingEntry(t *testing.T) {
 	tmp := t.TempDir()
-	archiveName := "backup-agent-test.tar.gz"
+	archiveName := "compute-agent-test.tar.gz"
 	archivePath := filepath.Join(tmp, archiveName)
 	if err := os.WriteFile(archivePath, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write archive: %v", err)
@@ -93,7 +93,7 @@ func TestVerifyArchiveChecksum_MissingEntry(t *testing.T) {
 
 func TestVerifyArchiveChecksum_Mismatch(t *testing.T) {
 	tmp := t.TempDir()
-	archiveName := "backup-agent-test.tar.gz"
+	archiveName := "compute-agent-test.tar.gz"
 	archivePath := filepath.Join(tmp, archiveName)
 	if err := os.WriteFile(archivePath, []byte("real"), 0o600); err != nil {
 		t.Fatalf("write archive: %v", err)

@@ -57,7 +57,7 @@ func (a *Agent) trySelfUpdate(ctx context.Context, repo string, desiredTag strin
 	}
 
 	a.log.Info("downloading agent release asset", "tag", tag, "asset", archiveName)
-	tmpDir, err := os.MkdirTemp("", "backup-agent-update-*")
+	tmpDir, err := os.MkdirTemp("", "compute-agent-update-*")
 	if err != nil {
 		return updateResult{OK: false, Tag: tag, Error: "tempdir", Detail: err.Error()}
 	}
@@ -74,7 +74,7 @@ func (a *Agent) trySelfUpdate(ctx context.Context, repo string, desiredTag strin
 		}
 	}
 
-	newBinPath := filepath.Join(tmpDir, "backup-agent.new")
+	newBinPath := filepath.Join(tmpDir, "compute-agent.new")
 	if runtime.GOOS == "windows" {
 		newBinPath += ".exe"
 	}
@@ -180,7 +180,7 @@ func resolveLatestAsset(ctx context.Context, repo string, desiredTag string, var
 	}
 
 	// Build asset name based on variant
-	platform := fmt.Sprintf("backup-agent-%s-%s", runtime.GOOS, runtime.GOARCH)
+	platform := fmt.Sprintf("compute-agent-%s-%s", runtime.GOOS, runtime.GOARCH)
 	if variant == "kiosk" {
 		platform += "-kiosk"
 	}
@@ -212,7 +212,7 @@ func fetchGitHubRelease(ctx context.Context, url string) (*ghRelease, error) {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "backup-agent-updater")
+	req.Header.Set("User-Agent", "compute-agent-updater")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -234,7 +234,7 @@ func downloadToFile(ctx context.Context, url string, dest string) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "backup-agent-updater")
+	req.Header.Set("User-Agent", "compute-agent-updater")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -331,7 +331,7 @@ func expectedBinaryName() string {
 
 // expectedBinaryNameForVariant returns the expected binary name for the given variant.
 func expectedBinaryNameForVariant(variant string) string {
-	base := fmt.Sprintf("backup-agent-%s-%s", runtime.GOOS, runtime.GOARCH)
+	base := fmt.Sprintf("compute-agent-%s-%s", runtime.GOOS, runtime.GOARCH)
 	if variant == "kiosk" {
 		base += "-kiosk"
 	}

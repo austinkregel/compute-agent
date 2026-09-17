@@ -27,7 +27,7 @@ var newAgent = func(cfg *config.Config, log *logging.Logger) (agentRunner, error
 // printVersion prints the version information and exits.
 // Extracted for testability.
 func printVersion() {
-	fmt.Printf("backup-agent %s (%s) built=%s\n", version.Version, version.Commit, version.BuildDate)
+	fmt.Printf("compute-agent %s (%s) built=%s\n", version.Version, version.Commit, version.BuildDate)
 }
 
 // handleVersionFlag processes the version flag and returns true if the program should exit.
@@ -41,7 +41,7 @@ func handleVersionFlag(showVersion bool) bool {
 }
 
 func main() {
-	// backup-agent service install|uninstall|start|stop|status [--config PATH]
+	// compute-agent service install|uninstall|start|stop|status [--config PATH]
 	if len(os.Args) > 1 && os.Args[1] == "service" {
 		os.Exit(runServiceCommand(os.Args[2:]))
 	}

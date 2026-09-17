@@ -246,8 +246,6 @@ func TestRegisterEventHandlers(t *testing.T) {
 		ShellInput:  func(ShellInput) {},
 		ShellResize: func(ShellResize) {},
 		ShellClose:  func(ShellClose) {},
-		BackupPlan:  func(BackupRequest) {},
-		BackupStart: func(BackupRequest) {},
 		SyncKeys:    func(SyncKeysRequest) {},
 		UpdateAgent: func(UpdateAgentRequest) {},
 	}
@@ -274,12 +272,6 @@ func TestRegisterEventHandlers(t *testing.T) {
 	}
 	if client.handlers.ShellClose == nil {
 		t.Error("ShellClose handler not set")
-	}
-	if client.handlers.BackupPlan == nil {
-		t.Error("BackupPlan handler not set")
-	}
-	if client.handlers.BackupStart == nil {
-		t.Error("BackupStart handler not set")
 	}
 	if client.handlers.SyncKeys == nil {
 		t.Error("SyncKeys handler not set")
@@ -1065,7 +1057,6 @@ func TestDispatchSignedCommand_AllEvents(t *testing.T) {
 	events := []string{
 		"admin_run", "shell_start", "shell_input", "shell_resize", "shell_close",
 		"log_tail_start", "log_tail_stop",
-		"backup_plan", "backup_start",
 		"sync_keys", "agent_update", "switch_variant", "check_updates",
 		"dir_list_request", "exec_request", "exec_allowlist", "file_get_request",
 		"file_put_start", "file_put_chunk", "file_put_finish",
@@ -1105,10 +1096,6 @@ func TestDispatchSignedCommand_AllEvents(t *testing.T) {
 				handlers.LogTailStart = func(LogTailStart) { mu.Lock(); called = true; mu.Unlock() }
 			case "log_tail_stop":
 				handlers.LogTailStop = func(LogTailStop) { mu.Lock(); called = true; mu.Unlock() }
-			case "backup_plan":
-				handlers.BackupPlan = func(BackupRequest) { mu.Lock(); called = true; mu.Unlock() }
-			case "backup_start":
-				handlers.BackupStart = func(BackupRequest) { mu.Lock(); called = true; mu.Unlock() }
 			case "sync_keys":
 				handlers.SyncKeys = func(SyncKeysRequest) { mu.Lock(); called = true; mu.Unlock() }
 			case "agent_update":
@@ -1385,7 +1372,7 @@ func TestActorOf_ExtractsPrincipal(t *testing.T) {
 		want    string
 	}{
 		{"present", `{"_actor":"oidc-sub-123","clientId":"n1"}`, "oidc-sub-123"},
-		{"system", `{"_actor":"system:backup-server"}`, "system:backup-server"},
+		{"system", `{"_actor":"system:compute-agent-server"}`, "system:compute-agent-server"},
 		{"absent (older server)", `{"clientId":"n1"}`, ""},
 		{"empty payload", ``, ""},
 		{"not an object", `"scalar"`, ""},

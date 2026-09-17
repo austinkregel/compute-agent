@@ -9,15 +9,14 @@ This directory contains the Go server monitoring agent and produces a single sel
 - OS update availability telemetry (best-effort) with periodic 12h refresh + manual refresh trigger from dashboard.
 - Remote shell with PTY (`creack/pty` on Unix, pipe fallback on Windows).
 - `admin_run` command executor with allow-list and per-command timeouts.
-- Backup planner/executor that walks local directories, honors ignore globs, and streams progress.
 - GitHub authorized_keys sync (`sync_keys`) with atomic append semantics.
 
 ## Building
 
 ```bash
 cd agent
-make build          # builds ./dist/backup-agent with kiosk support (CGO_ENABLED=1)
-make build-headless # builds ./dist/backup-agent without kiosk (CGO_ENABLED=0)
+make build          # builds ./dist/compute-agent with kiosk support (CGO_ENABLED=1)
+make build-headless # builds ./dist/compute-agent without kiosk (CGO_ENABLED=0)
 make build-all      # cross-compiles headless binaries for all supported targets
 make build-android  # android/arm64 for phone-class agents (needs NDK; see below)
 ```
@@ -48,12 +47,12 @@ used on Android instead.
 Deploying without root (binaries may be executed from `/data/local/tmp`):
 
 ```bash
-adb push dist/backup-agent-android-arm64 /data/local/tmp/backup-agent/backup-agent
-adb shell chmod 755 /data/local/tmp/backup-agent/backup-agent
-adb push agent-config.json /data/local/tmp/backup-agent/agent-config.json
-adb shell chmod 600 /data/local/tmp/backup-agent/agent-config.json
-adb shell 'cd /data/local/tmp/backup-agent && \
-  setsid ./backup-agent --config ./agent-config.json </dev/null >runtime.log 2>&1 &'
+adb push dist/compute-agent-android-arm64 /data/local/tmp/compute-agent/compute-agent
+adb shell chmod 755 /data/local/tmp/compute-agent/compute-agent
+adb push agent-config.json /data/local/tmp/compute-agent/agent-config.json
+adb shell chmod 600 /data/local/tmp/compute-agent/agent-config.json
+adb shell 'cd /data/local/tmp/compute-agent && \
+  setsid ./compute-agent --config ./agent-config.json </dev/null >runtime.log 2>&1 &'
 ```
 
 Set `telephony.enabled` plus the `companionToken` shown by the companion app
@@ -79,9 +78,9 @@ The CI pipeline produces two variants for each platform/architecture combination
 
 | Architecture | Headless | Kiosk |
 | --- | --- | --- |
-| x86_64 (amd64) | `backup-agent-linux-amd64` | `backup-agent-linux-amd64-kiosk` |
-| ARM64 | `backup-agent-linux-arm64` | `backup-agent-linux-arm64-kiosk` |
-| ARM (32-bit) | `backup-agent-linux-arm` | _(build locally)_ |
+| x86_64 (amd64) | `compute-agent-linux-amd64` | `compute-agent-linux-amd64-kiosk` |
+| ARM64 | `compute-agent-linux-arm64` | `compute-agent-linux-arm64-kiosk` |
+| ARM (32-bit) | `compute-agent-linux-arm` | _(build locally)_ |
 
 **Kiosk runtime requirements**:
 ```bash
@@ -99,8 +98,8 @@ sudo apt install libgtk-3-0 libwebkit2gtk-4.0-37
 
 | Architecture | Headless | Kiosk |
 | --- | --- | --- |
-| Intel (amd64) | `backup-agent-darwin-amd64` | `backup-agent-darwin-amd64-kiosk` |
-| Apple Silicon (arm64) | `backup-agent-darwin-arm64` | `backup-agent-darwin-arm64-kiosk` |
+| Intel (amd64) | `compute-agent-darwin-amd64` | `compute-agent-darwin-amd64-kiosk` |
+| Apple Silicon (arm64) | `compute-agent-darwin-arm64` | `compute-agent-darwin-arm64-kiosk` |
 
 No additional runtime requirements (WebKit is included with macOS).
 
@@ -108,7 +107,7 @@ No additional runtime requirements (WebKit is included with macOS).
 
 | Architecture | Headless | Kiosk |
 | --- | --- | --- |
-| x86_64 (amd64) | `backup-agent-windows-amd64.exe` | `backup-agent-windows-amd64-kiosk.exe` |
+| x86_64 (amd64) | `compute-agent-windows-amd64.exe` | `compute-agent-windows-amd64-kiosk.exe` |
 
 **Kiosk runtime requirements**: Microsoft Edge browser (included with Windows 10/11).
 
@@ -188,7 +187,7 @@ Notes:
 ## Running
 
 ```
-./dist/backup-agent --config /etc/backup-agent/config.json
+./dist/compute-agent --config /etc/compute-agent/config.json
 ```
 
 The binary logs to stdout and to the file configured via `logging.file`. Service managers (systemd, supervisord, etc.) can run the binary directly with the desired config file.
@@ -241,8 +240,8 @@ reads, the entrypoint understands `LOG_LEVEL`, `TRANSPORT_PATH`,
 `MAX_CLOCK_SKEW_SEC`, `ENABLE_SHELL`, `SHELL_IDLE_TIMEOUT_SEC`,
 `ADMIN_ALLOWED_CWDS`, `ADMIN_MAX_CONCURRENT`, `ADMIN_DEFAULT_TIMEOUT_SEC`,
 `REQUIRE_COMMAND_TOKEN`, `COMMAND_TOKEN`, `ENABLE_ALERTS`,
-`ALERTS_SCAN_INTERVAL_SEC`, `BACKUP_SOURCE_ROOTS`, `BACKUP_DEST_ROOTS` and
-`DIRBROWSE_ROOTS` (the last three are comma-separated lists).
+`ALERTS_SCAN_INTERVAL_SEC` and
+`DIRBROWSE_ROOTS` (the last is a comma-separated list).
 
 File access defaults deliberately narrow: only `/data`, plus `/host` when the
 host filesystem is mounted there (`-v /:/host:ro`). Widen it explicitly rather
@@ -256,7 +255,7 @@ layer, so a new agent version arrives as a new image.
 The [`ha-compute-agent`](https://github.com/austinkregel/ha-compute-agent)
 add-on is this same image — the Supervisor writes `/data/options.json` and the
 entrypoint renders it, mapping the add-on's volumes (`/homeassistant`, `/ssl`,
-`/media`, `/backup`, `/share`) into the backup and directory-browse roots.
+`/media`, `/share`) into the directory-browse roots.
 
 ## Kiosk Mode
 
@@ -266,9 +265,9 @@ When enabled, the agent opens a native WebView window that displays content cont
 
 ### Which Binary to Use
 
-- **Headless binary** (`backup-agent-linux-amd64`, etc.): Use for servers, VMs, containers, or any environment without a display. If kiosk is enabled in config, the agent will log a warning and continue running without kiosk functionality.
+- **Headless binary** (`compute-agent-linux-amd64`, etc.): Use for servers, VMs, containers, or any environment without a display. If kiosk is enabled in config, the agent will log a warning and continue running without kiosk functionality.
 
-- **Kiosk binary** (`backup-agent-linux-amd64-kiosk`, etc.): Use for machines with displays where you want kiosk functionality. Requires GUI runtime libraries on Linux.
+- **Kiosk binary** (`compute-agent-linux-amd64-kiosk`, etc.): Use for machines with displays where you want kiosk functionality. Requires GUI runtime libraries on Linux.
 
 ### Local Build Requirements
 

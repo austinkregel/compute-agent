@@ -19,7 +19,6 @@ import (
 	"github.com/austinkregel/compute-agent/internal/directserver"
 	"github.com/austinkregel/compute-agent/internal/kiosk"
 	"github.com/austinkregel/compute-agent/pkg/admin"
-	"github.com/austinkregel/compute-agent/pkg/backup"
 	"github.com/austinkregel/compute-agent/pkg/capability"
 	"github.com/austinkregel/compute-agent/pkg/config"
 	"github.com/austinkregel/compute-agent/pkg/dirbrowse"
@@ -79,7 +78,6 @@ type Agent struct {
 	transport *transport.Client
 	telemetry *telemetry.Publisher
 	admin     *admin.Runner
-	backups   *backup.Coordinator
 	uploads   *fileops.UploadManager
 	kiosk     kiosk.Manager
 	direct    *directserver.Server
@@ -133,8 +131,6 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 		ShellClose:      agent.handleShellClose,
 		LogTailStart:    agent.handleLogTailStart,
 		LogTailStop:     agent.handleLogTailStop,
-		BackupPlan:      agent.handleBackupPlan,
-		BackupStart:     agent.handleBackupStart,
 		SyncKeys:        agent.handleSyncKeys,
 		UpdateAgent:     agent.handleAgentUpdate,
 		SwitchVariant:   agent.handleSwitchVariant,
@@ -194,7 +190,6 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 	}
 	t.CapabilityGate = agent.caps.Has
 
-	backupCoord := backup.NewCoordinator(cfg, log.With("component", "backup"), t)
 	pub := telemetry.NewPublisher(cfg, log.With("component", "telemetry"), t)
 
 	// Wire Docker client if enabled
@@ -235,7 +230,6 @@ func New(cfg *config.Config, log *logging.Logger) (*Agent, error) {
 	agent.transport = t
 	agent.telemetry = pub
 	agent.admin = adminRunner
-	agent.backups = backupCoord
 
 	// Initialize kiosk subsystem if enabled
 	if cfg.Kiosk.Enabled {
@@ -527,18 +521,6 @@ func (a *Agent) handleShellResize(msg transport.ShellResize) {
 func (a *Agent) handleShellClose(msg transport.ShellClose) {
 	if err := a.admin.CloseShell(msg.Session); err != nil {
 		a.log.Debug("shell close failed", "session", msg.Session, "error", err)
-	}
-}
-
-func (a *Agent) handleBackupPlan(msg transport.BackupRequest) {
-	if err := a.backups.Plan(a.ctxOrBackground(), msg); err != nil {
-		a.log.Error("backup plan failed", "planId", msg.PlanID, "error", err)
-	}
-}
-
-func (a *Agent) handleBackupStart(msg transport.BackupRequest) {
-	if err := a.backups.Run(a.ctxOrBackground(), msg); err != nil {
-		a.log.Error("backup start failed", "planId", msg.PlanID, "error", err)
 	}
 }
 

@@ -115,14 +115,14 @@ jobs:
               -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
-            -o "dist/backup-agent-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}" \
+            -o "dist/compute-agent-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}" \
             ./cmd/agent
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: backup-agent-${{ matrix.os }}-${{ matrix.arch }}
-          path: dist/backup-agent-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+          name: compute-agent-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/compute-agent-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
           retention-days: 1
 
   # Build the Android/arm64 binary for phone-class agents (with CGO, via the
@@ -188,14 +188,14 @@ jobs:
               -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
-            -o "dist/backup-agent-android-arm64" \
+            -o "dist/compute-agent-android-arm64" \
             ./cmd/agent
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: backup-agent-android-arm64
-          path: dist/backup-agent-android-arm64
+          name: compute-agent-android-arm64
+          path: dist/compute-agent-android-arm64
           retention-days: 1
 
   # Build Linux kiosk binaries (with CGO for WebView support)
@@ -258,14 +258,14 @@ jobs:
               -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
-            -o "dist/backup-agent-linux-${{ matrix.arch }}-kiosk" \
+            -o "dist/compute-agent-linux-${{ matrix.arch }}-kiosk" \
             ./cmd/agent
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: backup-agent-linux-${{ matrix.arch }}-kiosk
-          path: dist/backup-agent-linux-${{ matrix.arch }}-kiosk
+          name: compute-agent-linux-${{ matrix.arch }}-kiosk
+          path: dist/compute-agent-linux-${{ matrix.arch }}-kiosk
           retention-days: 1
 
   # Build Linux ARM64 kiosk using native ARM64 runner
@@ -323,14 +323,14 @@ jobs:
               -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
-            -o "dist/backup-agent-linux-arm64-kiosk" \
+            -o "dist/compute-agent-linux-arm64-kiosk" \
             ./cmd/agent
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: backup-agent-linux-arm64-kiosk
-          path: dist/backup-agent-linux-arm64-kiosk
+          name: compute-agent-linux-arm64-kiosk
+          path: dist/compute-agent-linux-arm64-kiosk
           retention-days: 1
 
   # Build Linux ARM (32-bit) kiosk - skip if no native runner available
@@ -394,14 +394,14 @@ jobs:
               -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
-            -o "dist/backup-agent-darwin-${{ matrix.arch }}-kiosk" \
+            -o "dist/compute-agent-darwin-${{ matrix.arch }}-kiosk" \
             ./cmd/agent
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: backup-agent-darwin-${{ matrix.arch }}-kiosk
-          path: dist/backup-agent-darwin-${{ matrix.arch }}-kiosk
+          name: compute-agent-darwin-${{ matrix.arch }}-kiosk
+          path: dist/compute-agent-darwin-${{ matrix.arch }}-kiosk
           retention-days: 1
 
   # Build Windows kiosk binaries (with CGO)
@@ -457,14 +457,14 @@ jobs:
               -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${SHA}' \
               -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
-            -o "dist/backup-agent-windows-amd64-kiosk.exe" \
+            -o "dist/compute-agent-windows-amd64-kiosk.exe" \
             ./cmd/agent
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: backup-agent-windows-amd64-kiosk
-          path: dist/backup-agent-windows-amd64-kiosk.exe
+          name: compute-agent-windows-amd64-kiosk
+          path: dist/compute-agent-windows-amd64-kiosk.exe
           retention-days: 1
 
   # Publish the container image. This replaces the separate ha-compute-agent
@@ -574,17 +574,17 @@ jobs:
           # uploads, which fails ("Artifact download failed after 5 retries") and
           # takes the whole release job — and therefore every release asset — with
           # it. That is what silently stopped agents self-updating after v0.0.51.
-          pattern: backup-agent-*
+          pattern: compute-agent-*
 
       - name: Organize binaries
         run: |
           set -euo pipefail
           mkdir -p dist/release
           # Move all binaries to a flat structure
-          find dist/binaries -type f -name 'backup-agent-*' -exec mv {} dist/ \;
-          count=$(find dist -maxdepth 1 -type f -name 'backup-agent-*' | wc -l)
+          find dist/binaries -type f -name 'compute-agent-*' -exec mv {} dist/ \;
+          count=$(find dist -maxdepth 1 -type f -name 'compute-agent-*' | wc -l)
           echo "collected $count binaries:"
-          find dist -maxdepth 1 -type f -name 'backup-agent-*' -printf '  %f\n' | sort
+          find dist -maxdepth 1 -type f -name 'compute-agent-*' -printf '  %f\n' | sort
           if [ "$count" -eq 0 ]; then
             echo "::error::no agent binaries were downloaded; refusing to publish an assetless release"
             exit 1
@@ -596,12 +596,22 @@ jobs:
           mkdir -p release
           VERSION="${{ steps.version.outputs.version }}"
           # Restore executable bit lost during artifact upload/download
-          find . -maxdepth 1 -name 'backup-agent-*' ! -name '*.exe' -exec chmod +x {} \;
-          for file in backup-agent-*; do
+          find . -maxdepth 1 -name 'compute-agent-*' ! -name '*.exe' -exec chmod +x {} \;
+          # TRANSITIONAL: agents built before the backup-agent -> compute-agent
+          # rename self-update by looking for backup-agent-* archives, and
+          # insist the binary inside carries the old name too. Publish a legacy
+          # copy of each archive until the fleet has crossed the rename, then
+          # delete this block and the backup-agent* glob in the release step.
+          mkdir -p legacy
+          for file in compute-agent-*; do
+            legacy="backup-agent-${file#compute-agent-}"
+            cp -p "$file" "legacy/$legacy"
             if [[ "$file" == *.exe ]]; then
               zip "release/${file%.exe}-${VERSION}.zip" "$file"
+              (cd legacy && zip "../release/${legacy%.exe}-${VERSION}.zip" "$legacy")
             else
               tar -czf "release/${file}-${VERSION}.tar.gz" "$file"
+              tar -czf "release/${legacy}-${VERSION}.tar.gz" -C legacy "$legacy"
             fi
           done
 
@@ -658,9 +668,9 @@ jobs:
 
             | Architecture | Headless | Kiosk |
             | --- | --- | --- |
-            | x86_64 (amd64) | `backup-agent-linux-amd64` | `backup-agent-linux-amd64-kiosk` |
-            | ARM64 | `backup-agent-linux-arm64` | `backup-agent-linux-arm64-kiosk` |
-            | ARM (32-bit) | `backup-agent-linux-arm` | _(build locally)_ |
+            | x86_64 (amd64) | `compute-agent-linux-amd64` | `compute-agent-linux-amd64-kiosk` |
+            | ARM64 | `compute-agent-linux-arm64` | `compute-agent-linux-arm64-kiosk` |
+            | ARM (32-bit) | `compute-agent-linux-arm` | _(build locally)_ |
 
             **Kiosk runtime requirements**: `apt install libgtk-3-0 libwebkit2gtk-4.1-0`
 
@@ -668,17 +678,18 @@ jobs:
 
             | Architecture | Headless | Kiosk |
             | --- | --- | --- |
-            | Intel (amd64) | `backup-agent-darwin-amd64` | `backup-agent-darwin-amd64-kiosk` |
-            | Apple Silicon (arm64) | `backup-agent-darwin-arm64` | `backup-agent-darwin-arm64-kiosk` |
+            | Intel (amd64) | `compute-agent-darwin-amd64` | `compute-agent-darwin-amd64-kiosk` |
+            | Apple Silicon (arm64) | `compute-agent-darwin-arm64` | `compute-agent-darwin-arm64-kiosk` |
 
             ### Windows
 
             | Architecture | Headless | Kiosk |
             | --- | --- | --- |
-            | x86_64 (amd64) | `backup-agent-windows-amd64.exe` | `backup-agent-windows-amd64-kiosk.exe` |
+            | x86_64 (amd64) | `compute-agent-windows-amd64.exe` | `compute-agent-windows-amd64-kiosk.exe` |
 
             **Kiosk runtime requirements**: Microsoft Edge browser
           files: |
+            dist/release/compute-agent*
             dist/release/backup-agent*
             dist/release/checksums.txt
         env:

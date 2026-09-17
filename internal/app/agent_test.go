@@ -275,65 +275,6 @@ func TestHandleShellClose(t *testing.T) {
 	agent.handleShellClose(msg)
 }
 
-func TestHandleBackupPlan(t *testing.T) {
-	tmpdir := t.TempDir()
-	src := filepath.Join(tmpdir, "src")
-	dest := filepath.Join(tmpdir, "dest")
-	os.Mkdir(src, 0o755)
-	os.WriteFile(filepath.Join(src, "file.txt"), []byte("data"), 0o644)
-
-	cfg := &config.Config{
-		ClientID:  "test-client",
-		ServerURL: "https://example.com",
-		AuthToken: "test-token",
-		Transport: config.TransportConfig{Path: "/socket.io"},
-		Admin:     config.AdminConfig{EnableShell: true},
-		Shell:     config.ShellConfig{Command: "/bin/bash", Args: []string{"-l"}},
-	}
-	log, _ := logging.New(logging.Options{Level: "error"})
-	agent, _ := New(cfg, log)
-
-	msg := transport.BackupRequest{
-		PlanID:     "plan-1",
-		SourceDirs: []string{src},
-		DestRoot:   dest,
-	}
-
-	// Handler should not panic
-	agent.handleBackupPlan(msg)
-}
-
-func TestHandleBackupStart(t *testing.T) {
-	tmpdir := t.TempDir()
-	src := filepath.Join(tmpdir, "src")
-	dest := filepath.Join(tmpdir, "dest")
-	os.Mkdir(src, 0o755)
-	os.WriteFile(filepath.Join(src, "file.txt"), []byte("data"), 0o644)
-
-	cfg := &config.Config{
-		ClientID:  "test-client",
-		ServerURL: "https://example.com",
-		AuthToken: "test-token",
-		Transport: config.TransportConfig{Path: "/socket.io"},
-		Admin:     config.AdminConfig{EnableShell: true},
-		Shell:     config.ShellConfig{Command: "/bin/bash", Args: []string{"-l"}},
-	}
-	log, _ := logging.New(logging.Options{Level: "error"})
-	agent, _ := New(cfg, log)
-
-	msg := transport.BackupRequest{
-		PlanID:     "plan-1",
-		SourceDirs: []string{src},
-		DestRoot:   dest,
-	}
-
-	// Generate plan first
-	agent.handleBackupPlan(msg)
-
-	// Then start backup - should not panic
-	agent.handleBackupStart(msg)
-}
-
 func TestHandleSyncKeys_ValidUser(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping network test in short mode")

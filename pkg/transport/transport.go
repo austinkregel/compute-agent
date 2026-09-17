@@ -62,8 +62,6 @@ type Handlers struct {
 	ShellClose      func(ShellClose)
 	LogTailStart    func(LogTailStart)
 	LogTailStop     func(LogTailStop)
-	BackupPlan      func(BackupRequest)
-	BackupStart     func(BackupRequest)
 	SyncKeys        func(SyncKeysRequest)
 	UpdateAgent     func(UpdateAgentRequest)
 	SwitchVariant   func(SwitchVariantRequest)
@@ -165,17 +163,6 @@ type LogTailStart struct {
 // LogTailStop stops a streaming log tail session.
 type LogTailStop struct {
 	Session string `json:"session"`
-}
-
-// BackupRequest describes plan/run payloads.
-type BackupRequest struct {
-	PlanID      string   `json:"planId"`
-	Host        string   `json:"host"`
-	User        string   `json:"user"`
-	Port        int      `json:"port"`
-	SourceDirs  []string `json:"sourceDirs"`
-	DestRoot    string   `json:"destRoot"`
-	IgnoreGlobs []string `json:"ignoreGlobs"`
 }
 
 // DirListRequest asks the agent to list a single directory (local or remote).
@@ -1028,26 +1015,6 @@ func (c *Client) dispatchSignedCommand(event string, payload json.RawMessage) {
 		}
 		if c.handlers.LogTailStop != nil {
 			c.handlers.LogTailStop(msg)
-		}
-
-	case "backup_plan":
-		var msg BackupRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("failed to unmarshal backup_plan payload", "error", err)
-			return
-		}
-		if c.handlers.BackupPlan != nil {
-			c.handlers.BackupPlan(msg)
-		}
-
-	case "backup_start":
-		var msg BackupRequest
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			c.log.Error("failed to unmarshal backup_start payload", "error", err)
-			return
-		}
-		if c.handlers.BackupStart != nil {
-			c.handlers.BackupStart(msg)
 		}
 
 	case "sync_keys":

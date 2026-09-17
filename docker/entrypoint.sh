@@ -108,8 +108,6 @@ render_config() {
       --arg commandToken "$CFG_COMMAND_TOKEN" \
       --argjson enableAlerts "$CFG_ENABLE_ALERTS" \
       --argjson alertsScanIntervalSec "$CFG_ALERTS_SCAN_INTERVAL" \
-      --argjson backupSourceRoots "$CFG_BACKUP_SOURCE_ROOTS" \
-      --argjson backupDestRoots "$CFG_BACKUP_DEST_ROOTS" \
       --argjson dirBrowseRoots "$CFG_DIRBROWSE_ROOTS" \
       --argjson dockerEnabled "$CFG_DOCKER_ENABLED" \
       --arg dockerSocket "$CFG_DOCKER_SOCKET" \
@@ -133,10 +131,6 @@ render_config() {
           commandToken: $commandToken,
           rateLimitMax: 0,
           rateLimitWindowSec: 0
-        },
-        backup: {
-          allowedSourceRoots: $backupSourceRoots,
-          allowedDestRoots: $backupDestRoots
         },
         transport: {
           skipTlsVerify: $skipTlsVerify,
@@ -205,9 +199,7 @@ collect_from_options() {
   CFG_ALLOWED_CWDS=$(jq -c '.allowed_cwds // []' "$OPTIONS_FILE")
 
   # Supervisor-mapped volumes (see the add-on's config.yaml `map:` block).
-  CFG_BACKUP_SOURCE_ROOTS='["/homeassistant","/ssl","/media"]'
-  CFG_BACKUP_DEST_ROOTS='["/backup","/share"]'
-  CFG_DIRBROWSE_ROOTS='["/homeassistant","/backup","/share","/ssl","/media","/data"]'
+  CFG_DIRBROWSE_ROOTS='["/homeassistant","/share","/ssl","/media","/data"]'
   # No Docker socket is mapped into an add-on container.
   CFG_DOCKER_ENABLED="false"
 }
@@ -248,14 +240,12 @@ collect_from_env() {
 
   # Default file roots stay narrow: the agent's own /data volume, plus the host
   # filesystem only when the operator explicitly mounted it. Widen deliberately
-  # with BACKUP_SOURCE_ROOTS / BACKUP_DEST_ROOTS / DIRBROWSE_ROOTS.
+  # with DIRBROWSE_ROOTS.
   local default_roots="/data"
   if [ -d "$HOST_MOUNT" ]; then
     log "host filesystem detected at $HOST_MOUNT"
     default_roots="/data,$HOST_MOUNT"
   fi
-  CFG_BACKUP_SOURCE_ROOTS=$(json_list_from_csv "$(env_or BACKUP_SOURCE_ROOTS "$default_roots")")
-  CFG_BACKUP_DEST_ROOTS=$(json_list_from_csv "$(env_or BACKUP_DEST_ROOTS "/data")")
   CFG_DIRBROWSE_ROOTS=$(json_list_from_csv "$(env_or DIRBROWSE_ROOTS "$default_roots")")
 }
 
@@ -284,5 +274,5 @@ else
   log "config written to $CONFIG_PATH"
 fi
 
-log "starting $(/usr/local/bin/backup-agent --version 2>/dev/null || echo backup-agent)"
+log "starting $(/usr/local/bin/compute-agent --version 2>/dev/null || echo compute-agent)"
 exec "$@"

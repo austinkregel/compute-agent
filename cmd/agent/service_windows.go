@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	serviceName    = "BackupAgent"
-	serviceDisplay = "Backup Agent"
-	serviceDesc    = "Compute backup agent (headless)."
+	serviceName    = "ComputeAgent"
+	serviceDisplay = "Compute Agent"
+	serviceDesc    = "Compute Agent (headless)."
 )
 
 // runUnderServiceManager runs the agent under the SCM when launched as a
@@ -73,7 +73,7 @@ func (s *agentService) Execute(_ []string, r <-chan svc.ChangeRequest, changes c
 // runServiceCommand implements the `service <subcommand>` CLI.
 func runServiceCommand(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: backup-agent service <install|uninstall|start|stop|status> [--config PATH]")
+		fmt.Fprintln(os.Stderr, "usage: compute-agent service <install|uninstall|start|stop|status> [--config PATH]")
 		return 2
 	}
 	sub := args[0]

@@ -34,23 +34,22 @@ RUN set -eux; \
         -X 'github.com/austinkregel/compute-agent/pkg/version.Version=${VERSION}' \
         -X 'github.com/austinkregel/compute-agent/pkg/version.Commit=${COMMIT}' \
         -X 'github.com/austinkregel/compute-agent/pkg/version.BuildDate=${BUILD_DATE}'" \
-      -o /out/backup-agent ./cmd/agent
+      -o /out/compute-agent ./cmd/agent
 
 FROM alpine:3.20 AS runtime
 
 # bash  — interactive shell sessions (shell.command) and this entrypoint
 # jq    — renders the agent config from env vars / Supervisor options
-# rsync — used by pkg/backup for file transfers
 # tzdata, ca-certificates — correct timestamps and TLS to the control plane
-RUN apk add --no-cache bash ca-certificates jq rsync tzdata
+RUN apk add --no-cache bash ca-certificates jq tzdata
 
 ENV CLIENT_CONFIG_PATH=/data/agent-config.json \
     LOG_FILE=/data/agent.log \
     TZ=UTC
 
-COPY --from=build /out/backup-agent /usr/local/bin/backup-agent
+COPY --from=build /out/compute-agent /usr/local/bin/compute-agent
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/backup-agent /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/compute-agent /usr/local/bin/entrypoint.sh
 
 # /data holds the rendered config, the log, and any agent state. Runs as root
 # on purpose: the agent reads host telemetry, executes allowlisted admin
@@ -60,4 +59,4 @@ VOLUME ["/data"]
 WORKDIR /data
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["/usr/local/bin/backup-agent", "--config", "/data/agent-config.json"]
+CMD ["/usr/local/bin/compute-agent", "--config", "/data/agent-config.json"]

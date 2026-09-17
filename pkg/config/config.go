@@ -26,7 +26,6 @@ type Config struct {
 	PongTimeoutSec int                `json:"pongTimeoutSec"`
 	Connectivity   ConnectivityConfig `json:"connectivity"`
 	Admin          AdminConfig        `json:"admin"`
-	Backup         BackupConfig       `json:"backup"`
 	Transport      TransportConfig    `json:"transport"`
 	Logging        LoggingConfig      `json:"logging"`
 	Shell          ShellConfig        `json:"shell"`
@@ -246,17 +245,6 @@ type AdminConfig struct {
 	CommandToken       string `json:"commandToken"`
 	RateLimitMax       int    `json:"rateLimitMax"`
 	RateLimitWindowSec int    `json:"rateLimitWindowSec"`
-}
-
-// BackupConfig constrains server-provided backup requests.
-type BackupConfig struct {
-	// AllowedSourceRoots restricts source directories that may be walked.
-	// If empty, backups may read from any local path.
-	AllowedSourceRoots []string `json:"allowedSourceRoots"`
-
-	// AllowedDestRoots restricts destination roots that files may be written under.
-	// If empty, backups may write under any local path.
-	AllowedDestRoots []string `json:"allowedDestRoots"`
 }
 
 // TransportConfig controls TLS and socket path options.
