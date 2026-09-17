@@ -65,7 +65,7 @@ jobs:
           echo '{"server_url":"wss://ha.invalid/ws/agent","auth_token":"ci","client_id":"ci-ha"}' > /tmp/hadata/options.json
           docker run --rm -v /tmp/hadata:/data \
             --entrypoint /usr/local/bin/entrypoint.sh compute-agent:ci \
-            bash -c 'jq -e ".clientId == \"ci-ha\" and (.backup.allowedSourceRoots | index(\"/homeassistant\"))" /data/agent-config.json'
+            bash -c 'jq -e ".clientId == \"ci-ha\" and (.dirBrowse.allowedRoots | index(\"/homeassistant\"))" /data/agent-config.json'
 
       - name: Agent rejects a run with no configuration
         run: |

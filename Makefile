@@ -1,5 +1,5 @@
 BINDIR ?= dist
-APP    ?= backup-agent
+APP    ?= compute-agent
 
 PLATFORMS = \
 	linux/amd64 \

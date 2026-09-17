@@ -36,7 +36,7 @@ func TestMain_VersionFlagPath(t *testing.T) {
 
 	// Reset flags
 	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
-	os.Args = []string{"backup-agent", "-version"}
+	os.Args = []string{"compute-agent", "-version"}
 
 	var showVersion bool
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
@@ -81,11 +81,11 @@ func TestHelperProcess_Main(t *testing.T) {
 
 	switch mode {
 	case "version_flag":
-		os.Args = []string{"backup-agent", "-version"}
+		os.Args = []string{"compute-agent", "-version"}
 	case "invalid_config", "missing_config", "logger_init_failure", "agent_creation_failure", "agent_run_error", "agent_run_canceled", "agent_run_success":
-		os.Args = []string{"backup-agent", "--config", cfgPath}
+		os.Args = []string{"compute-agent", "--config", cfgPath}
 	default:
-		os.Args = []string{"backup-agent"}
+		os.Args = []string{"compute-agent"}
 	}
 
 	main()
@@ -104,8 +104,8 @@ func TestMain_VersionFlag(t *testing.T) {
 		t.Fatalf("command failed: %v, output: %s", err, output)
 	}
 
-	if !strings.Contains(string(output), "backup-agent") {
-		t.Errorf("expected version output to contain 'backup-agent', got %q", string(output))
+	if !strings.Contains(string(output), "compute-agent") {
+		t.Errorf("expected version output to contain 'compute-agent', got %q", string(output))
 	}
 }
 
@@ -128,7 +128,7 @@ func TestMain_ConfigFlag(t *testing.T) {
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
 
-	os.Args = []string{"backup-agent", "--config", cfgPath, "--version"}
+	os.Args = []string{"compute-agent", "--config", cfgPath, "--version"}
 	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 
 	var cfgPathFlag string

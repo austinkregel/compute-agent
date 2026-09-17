@@ -29,7 +29,7 @@ type ContainerInventory struct {
 }
 
 // ListAllContainers enumerates every container on the host and classifies each
-// as "managed" (by backup-server), "swarm", or "unmanaged".
+// as "managed" (by compute-agent-server), "swarm", or "unmanaged".
 func (c *Client) ListAllContainers(ctx context.Context) (*ContainerInventory, error) {
 	if c == nil || c.cli == nil {
 		return nil, errDockerUnavail
@@ -55,7 +55,10 @@ func (c *Client) ListAllContainers(ctx context.Context) (*ContainerInventory, er
 		}
 
 		switch {
-		case ct.Labels["managed-by"] == "backup-server":
+		// "backup-server" is the pre-rename label value. Containers deployed
+		// before the rename still carry it, so both are accepted.
+		case ct.Labels["managed-by"] == "compute-agent-server" ||
+			ct.Labels["managed-by"] == "backup-server":
 			ci.Category = "managed"
 			ci.StackName = ct.Labels["com.docker.compose.project"]
 			ci.Service = ct.Labels["com.docker.compose.service"]

@@ -21,7 +21,7 @@ services:
       - compute-agent-data:/data
       # Optional: Docker/Swarm inventory. Read-only; the agent never writes here.
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # Optional: host filesystem for backups and directory browsing. Mounting
+      # Optional: host filesystem for directory browsing. Mounting
       # it also widens the agent's default file roots to include /host.
       # - /:/host:ro
 

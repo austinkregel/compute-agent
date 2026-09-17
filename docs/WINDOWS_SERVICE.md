@@ -17,11 +17,11 @@ working directory defaults to `C:\Windows\System32`, so relative config/log
 paths resolve there.
 
 ```
-backup-agent.exe service install --config C:\ProgramData\backup-agent\agent-config.json
-backup-agent.exe service start
+compute-agent.exe service install --config C:\ProgramData\compute-agent\agent-config.json
+compute-agent.exe service start
 ```
 
-`install` registers the service `BackupAgent` with:
+`install` registers the service `ComputeAgent` with:
 
 - **Automatic (delayed) start** — comes up after boot.
 - **Recovery actions** — restart after 5s, 5s, then 30s, with the counter
@@ -35,10 +35,10 @@ service's command line.
 ## Manage
 
 ```
-backup-agent.exe service status      # not installed | running | stopped | ...
-backup-agent.exe service stop
-backup-agent.exe service start
-backup-agent.exe service uninstall   # stops then removes the service
+compute-agent.exe service status      # not installed | running | stopped | ...
+compute-agent.exe service stop
+compute-agent.exe service start
+compute-agent.exe service uninstall   # stops then removes the service
 ```
 
 ## How update-restart works under the service

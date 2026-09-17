@@ -24,8 +24,6 @@ service. Prefer a dedicated account and grant only what a specific feature needs
   read-only D-Bus calls. Linux only.
 - **Shell sessions and command execution**, as the agent's own user.
 - **Crontab.** The agent edits its own user's crontab.
-- **Backups.** Local walks and copies, or `rsync` over SSH, bounded by ordinary
-  filesystem permissions.
 - **Directory browsing**, local and over SSH/SMB, using the agent user's own
   SSH agent or private keys.
 - **SSH key sync.** Writes to the **agent process's own**
@@ -84,7 +82,7 @@ allowlist. `admin.trustedSigners` holds those keys and ships with one built-in
 default. Set `admin.signatureTrustStrict` to disable the mechanism.
 
 **The token check covers `admin_run` only.** `admin.requireToken` and
-`admin.commandToken` gate that one path. `exec_request`, `shell_start`, backups,
+`admin.commandToken` gate that one path. `exec_request`, `shell_start`,
 key sync, and file operations rely entirely on command-signature verification.
 
 **Interactive shells are not allowlisted.** `admin.enableShell` is the whole gate;
@@ -108,8 +106,6 @@ running as root.
 | What | Mode |
 |---|---|
 | Log file and its directory | dir `0700`, file `0600`, rotating at 10 MiB |
-| Backup plan and progress state | dir `0700`, files `0600`, written atomically |
-| Backup destination files | dir `0700`, file `0600` |
 | `~/.ssh` and `authorized_keys` | dir `0700`, file `0600`, atomic rename |
 | Kiosk layout and content stores | `0600`, in the process working directory |
 | Uploaded files | caller-supplied mode, parent directories `0755` |
@@ -144,7 +140,7 @@ restarts the supervisor. **Supervisord, not systemd, is the supervision
 mechanism** — no systemd unit ships in this repository. systemd is only ever read
 from, for telemetry.
 
-If the `backup-agent` user does not exist, the installer warns and the agent runs
+If the `compute-agent` user does not exist, the installer warns and the agent runs
 as root.
 
 Windows service subcommands (`service install|uninstall|start|stop|status`) need
@@ -176,8 +172,6 @@ Privilege- and safety-relevant settings, with defaults:
 | `admin.rateLimitWindowSec` | `60` when limiting | Window length |
 | `admin.trustedSigners` | one built-in key | Signature-based allowlist bypass |
 | `admin.signatureTrustStrict` | `false` | Disables that bypass |
-| `backup.allowedSourceRoots` | none | Empty is unrestricted |
-| `backup.allowedDestRoots` | none | Empty is unrestricted |
 | `dirBrowse.allowedRoots` | none | Empty is unrestricted for listing |
 | `dirBrowse.sshHostKeyPolicy` | `known_hosts` | Or `insecure_accept_any` |
 | `transport.skipTlsVerify` | `false` | Env `AGENT_SKIP_TLS_VERIFY` |
@@ -186,8 +180,8 @@ Privilege- and safety-relevant settings, with defaults:
 | `directMode.enabled` | `false` | Inbound listener; refuses to start without cert, listen address, and roots |
 
 Note the asymmetry in the "empty means" column: the exec allowlist and
-`allowedCwds` fail closed, while the browse and backup root lists fail open. Set
-the latter explicitly if the agent runs anywhere untrusted.
+`allowedCwds` fail closed, while the browse root list fails open. Set
+it explicitly if the agent runs anywhere untrusted.
 
 Config path is `CLIENT_CONFIG_PATH`, defaulting to `./agent-config.json`. Values
 load as defaults, then the JSON file, then environment overrides:

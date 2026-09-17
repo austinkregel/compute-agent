@@ -60,7 +60,7 @@ func kioskUserDataDir(browserPath string) string {
 	if filepath.Base(browserPath) == "msedge.exe" {
 		name = "edge"
 	}
-	return filepath.Join(base, "backup-agent", "kiosk-"+name)
+	return filepath.Join(base, "compute-agent", "kiosk-"+name)
 }
 
 func winBrowserArgs(browserPath, url, userDataDir string, fullscreen bool) []string {
